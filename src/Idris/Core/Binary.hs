@@ -8,15 +8,15 @@ Maintainer  : The Idris Community.
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 module Idris.Core.Binary where
 
-import Control.Applicative ((<*>), (<$>))
-import Control.Monad (liftM2)
-import Control.DeepSeq (($!!))
+import Idris.Core.TT
 
+import Control.Applicative ((<$>), (<*>))
+import Control.DeepSeq (($!!))
+import Control.Monad (liftM2)
 import Data.Binary
-import Data.Vector.Binary
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as E
-import Idris.Core.TT
+import Data.Vector.Binary
 
 instance Binary ErrorReportPart where
   put (TextPart msg) = do putWord8 0 ; put msg
@@ -342,9 +342,9 @@ instance Binary SpecialName where
                                       put x1
                                       put x2
                                       put x3
-                InstanceN x1 x2 -> do putWord8 1
-                                      put x1
-                                      put x2
+                ImplementationN x1 x2 -> do putWord8 1
+                                            put x1
+                                            put x2
                 ParentN x1 x2 -> do putWord8 2
                                     put x1
                                     put x2
@@ -352,7 +352,7 @@ instance Binary SpecialName where
                                  put x1
                 CaseN x1 x2 -> do putWord8 4; put x1; put x2
                 ElimN x1 -> do putWord8 5; put x1
-                InstanceCtorN x1 -> do putWord8 6; put x1
+                ImplementationCtorN x1 -> do putWord8 6; put x1
                 WithN x1 x2 -> do putWord8 7
                                   put x1
                                   put x2
@@ -368,7 +368,7 @@ instance Binary SpecialName where
                            return (WhereN x1 x2 x3)
                    1 -> do x1 <- get
                            x2 <- get
-                           return (InstanceN x1 x2)
+                           return (ImplementationN x1 x2)
                    2 -> do x1 <- get
                            x2 <- get
                            return (ParentN x1 x2)
@@ -380,7 +380,7 @@ instance Binary SpecialName where
                    5 -> do x1 <- get
                            return (ElimN x1)
                    6 -> do x1 <- get
-                           return (InstanceCtorN x1)
+                           return (ImplementationCtorN x1)
                    7 -> do x1 <- get
                            x2 <- get
                            return (WithN x1 x2)

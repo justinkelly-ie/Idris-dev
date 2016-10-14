@@ -22,24 +22,20 @@ import Control.Exception as CE
 import Control.Monad (when)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-
 import Foreign.C
-
-import System.Directory (getTemporaryDirectory
-                        , removeFile
-                        , removeDirectoryRecursive
-                        , createDirectoryIfMissing
-                        )
-import System.FilePath ((</>), normalise)
-import System.IO
+import System.Directory (createDirectoryIfMissing, getTemporaryDirectory,
+                         removeDirectoryRecursive, removeFile)
+import System.FilePath (normalise, (</>))
 import System.Info
+import System.IO
 import System.IO.Error
 
 #ifdef FREESTANDING
-import Tools_idris
-import System.FilePath (isAbsolute, dropFileName)
+import Data.List (intercalate)
 import System.Directory (doesDirectoryExist)
-import System.Environment (getEnv, setEnv, getExecutablePath)
+import System.Environment (getEnv, getExecutablePath, setEnv)
+import System.FilePath (dropFileName, isAbsolute, searchPathSeparator)
+import Tools_idris
 #endif
 
 catchIO :: IO a -> (IOError -> IO a) -> IO a
@@ -109,11 +105,10 @@ setupBundledCC = when hasBundledToolchain
                                     if absolute
                                        then tcDir
                                        else dropFileName exePath ++ tcDir
-                        let pathSep = if isWindows then ";" else ":"
                         present <- doesDirectoryExist target
-                        when present
-                            $ do newPath <- return $ target ++ pathSep ++ path
-                                 setEnv "PATH" newPath
+                        when present $ do
+                          newPath <- return $ intercalate [searchPathSeparator] [target, path]
+                          setEnv "PATH" newPath
 #else
 setupBundledCC = return ()
 #endif

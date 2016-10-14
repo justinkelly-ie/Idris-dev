@@ -14,30 +14,29 @@ module Idris.Interactive(
   , makeLemma
   ) where
 
-import Idris.Core.TT
-import Idris.Core.Evaluate
-import Idris.CaseSplit
 import Idris.AbsSyntax
+import Idris.CaseSplit
+import Idris.Core.Evaluate
+import Idris.Core.TT
+import Idris.Delaborate
+import Idris.Elab.Term
+import Idris.Elab.Value
 import Idris.ElabDecls
 import Idris.Error
 import Idris.ErrReverse
-import Idris.Delaborate
-import Idris.Output
 import Idris.IdeMode hiding (IdeModeCommand(..))
-import Idris.Elab.Value
-import Idris.Elab.Term
+import Idris.Output
 
 import Util.Pretty
 import Util.System
 
-import System.FilePath
-import System.Directory
-import System.IO
 import Data.Char
-import Data.Maybe (fromMaybe)
 import Data.List (isSuffixOf)
-
+import Data.Maybe (fromMaybe)
 import Debug.Trace
+import System.Directory
+import System.FilePath
+import System.IO
 
 caseSplitAt :: FilePath -> Bool -> Int -> Name -> Idris ()
 caseSplitAt fn updatefile l n
@@ -81,7 +80,7 @@ addClauseFrom fn updatefile l n = do
           else iPrintResult cl
   where
     getIndent i n [] = 0
-    getIndent i n xs | take 9 xs == "instance " = i
+    getIndent i n xs | take 9 xs == "implementation " = i
     getIndent i n xs | take (length n) xs == n = i
     getIndent i n (x : xs) = getIndent (i + 1) n xs
 
@@ -426,7 +425,7 @@ makeLemma fn updatefile l n
         -- Guess which binders should be implicits in the generated lemma.
         -- Make them implicit if they appear guarded by a top level constructor,
         -- or at the top level themselves.
-        -- Also, make type class instances implicit
+        -- Also, make interface implementations implicit
         guessImps :: IState -> Context -> Term -> [Name]
         -- machine names aren't lifted
         guessImps ist ctxt (Bind n@(MN _ _) (Pi _ ty _) sc)

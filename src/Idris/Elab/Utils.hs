@@ -9,35 +9,32 @@ Maintainer  : The Idris Community.
 module Idris.Elab.Utils where
 
 import Idris.AbsSyntax
-import Idris.Error
+import Idris.Core.Elaborate hiding (Tactic(..))
+import Idris.Core.Evaluate
+import Idris.Core.TT
+import Idris.Core.Typecheck
 import Idris.DeepSeq
 import Idris.Delaborate
 import Idris.Docstrings
+import Idris.Error
 import Idris.Output
-
-import Idris.Core.TT
-import Idris.Core.Elaborate hiding (Tactic(..))
-import Idris.Core.Evaluate
-import Idris.Core.Typecheck
 
 import Util.Pretty
 
 import Control.Applicative hiding (Const)
-import Control.Monad.State
 import Control.Monad
+import Control.Monad.State
 import Data.List
+import qualified Data.Map as Map
 import Data.Maybe
 import qualified Data.Traversable as Traversable
-
 import Debug.Trace
-
-import qualified Data.Map as Map
 
 recheckC = recheckC_borrowing False True []
 
 recheckC_borrowing uniq_check addConstrs bs tcns fc mkerr env t
     = do -- t' <- applyOpts (forget t) (doesn't work, or speed things up...)
-         
+
          ctxt <- getContext
          t' <- case safeForget t of
                     Just ft -> return ft
@@ -47,7 +44,7 @@ recheckC_borrowing uniq_check addConstrs bs tcns fc mkerr env t
                                    OK x -> return x
          logElab 6 $ "CONSTRAINTS ADDED: " ++ show (tm, ty, cs)
          tit <- typeInType
-         when (not tit && addConstrs) $ 
+         when (not tit && addConstrs) $
                            do addConstraints fc cs
                               mapM_ (\c -> addIBC (IBCConstraint fc c)) (snd cs)
          mapM_ (checkDeprecated fc) (allTTNames tm)
@@ -185,7 +182,7 @@ decorateid decorate (PClauses f o n cs)
           dappname t = t
 
 
--- if 't' is a type class application, assume its arguments are injective
+-- if 't' is an interface application, assume its arguments are injective
 pbinds :: IState -> Term -> ElabD ()
 pbinds i (Bind n (PVar t) sc)
     = do attack; patbind n
@@ -193,7 +190,7 @@ pbinds i (Bind n (PVar t) sc)
          case unApply (normalise (tt_ctxt i) env t) of
               (P _ c _, args) -> case lookupCtxt c (idris_interfaces i) of
                                    [] -> return ()
-                                   _ -> -- type class, set as injective
+                                   _ -> -- interface, set as injective
                                         mapM_ setinjArg args
               _ -> return ()
          pbinds i sc

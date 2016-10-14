@@ -15,22 +15,21 @@ module Idris.ProofSearch(
   , resolveTC
   ) where
 
-import Idris.Core.Elaborate hiding (Tactic(..))
-import Idris.Core.TT
-import Idris.Core.Unify
-import Idris.Core.Evaluate
-import Idris.Core.CaseTree
-import Idris.Core.Typecheck
-
 import Idris.AbsSyntax
+import Idris.Core.CaseTree
+import Idris.Core.Elaborate hiding (Tactic(..))
+import Idris.Core.Evaluate
+import Idris.Core.TT
+import Idris.Core.Typecheck
+import Idris.Core.Unify
 import Idris.Delaborate
 import Idris.Error
 
 import Control.Applicative ((<$>))
 import Control.Monad
 import Control.Monad.State.Strict
-import qualified Data.Set as S
 import Data.List
+import qualified Data.Set as S
 import Debug.Trace
 
 -- Pass in a term elaborator to avoid a cyclic dependency with ElabTerm
@@ -352,7 +351,7 @@ proofSearch rec fromProver ambigok deferonfail maxDepth elab fn nroot psnames hi
 
 -- | Resolve interfaces. This will only pick up 'normal'
 -- implementations, never named implementations (which is enforced by
--- 'findInstances').
+-- 'findImplementations').
 resolveTC :: Bool                -- ^ using default Int
           -> Bool                -- ^ allow open implementations
           -> Int                 -- ^ depth
@@ -403,12 +402,12 @@ resTC' tcs defaultOn openOK topholes depth topg fn elab ist
                               P _ n _ -> zip (repeat n) okholePos
                               _ -> []
 
-           traceWhen ulog ("Resolving class " ++ show g ++ "\nin" ++ show env ++ "\n" ++ show okholes) $
+           traceWhen ulog ("Resolving interface " ++ show g ++ "\nin" ++ show env ++ "\n" ++ show okholes) $
             try' (trivialTCs okholes elab ist)
                 (do addDefault t tc ttypes
                     let stk = map fst (filter snd $ elab_stack ist)
-                    let insts = idris_openimpls ist ++ findInstances ist t
-                    blunderbuss t depth stk (stk ++ insts)) True
+                    let impls = idris_openimpls ist ++ findImplementations ist t
+                    blunderbuss t depth stk (stk ++ impls)) True
 
     -- returns Just hs if okay, where hs are holes which are okay in the
     -- goal, or Nothing if not okay to proceed
@@ -489,7 +488,7 @@ resTC' tcs defaultOn openOK topholes depth topg fn elab ist
            = do lams <- introImps
                 t <- goal
                 let (tc, ttypes) = trace (show t) $ unApply (getRetTy t)
---                 if (all boundVar ttypes) then resolveTC (depth - 1) fn insts ist
+--                 if (all boundVar ttypes) then resolveTC (depth - 1) fn impls ist
 --                   else do
                    -- if there's a hole in the goal, don't even try
                 let imps = case lookupCtxtName n (idris_implicits ist) of
@@ -522,12 +521,12 @@ resTC' tcs defaultOn openOK topholes depth topg fn elab ist
 
 -- | Find the names of implementations that have been designeated for
 -- searching (i.e. non-named implementations or implementations from Elab scripts)
-findInstances :: IState -> Term -> [Name]
-findInstances ist t
+findImplementations :: IState -> Term -> [Name]
+findImplementations ist t
     | (P _ n _, _) <- unApply (getRetTy t)
         = case lookupCtxt n (idris_interfaces ist) of
-            [CI _ _ _ _ _ ins _] ->
-              [n | (n, True) <- ins, accessible n]
+            [ci] -> let ins = interface_implementations ci in
+                        [n | (n, True) <- ins, accessible n]
             _ -> []
     | otherwise = []
   where accessible n = case lookupDefAccExact n False (tt_ctxt ist) of

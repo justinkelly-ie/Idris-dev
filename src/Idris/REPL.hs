@@ -4,8 +4,8 @@ Description : Entry Point for the Idris REPL and CLI.
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
-{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, DeriveFunctor,
-             PatternGuards, CPP #-}
+{-# LANGUAGE CPP, DeriveFunctor, FlexibleInstances, MultiParamTypeClasses,
+             PatternGuards #-}
 module Idris.REPL
   ( idemodeStart
   , startServer
@@ -17,89 +17,84 @@ module Idris.REPL
   ) where
 
 import Idris.AbsSyntax
-import Idris.ASTUtils
 import Idris.Apropos (apropos, aproposModules)
-import Idris.REPL.Parser
-import Idris.Error
-import Idris.IBC
-import Idris.ErrReverse
-import Idris.Delaborate
-import Idris.Docstrings (overview, renderDocstring, renderDocTerm)
-import Idris.Help
-import Idris.IdrisDoc
-import Idris.Prover
-import Idris.Parser hiding (indent)
-import Idris.Coverage
-import Idris.Docs hiding (Doc)
-import Idris.Completion
-import qualified Idris.IdeMode as IdeMode
+import Idris.ASTUtils
 import Idris.Colours hiding (colourise)
-import Idris.Inliner
-import Idris.Output
-import Idris.Interactive
-import Idris.WhoCalls
-import Idris.TypeSearch (searchByType)
-
-import Idris.REPL.Browse (namesInNS, namespacesInNS)
-import Idris.REPL.Commands
-
-import Idris.ElabDecls
-import Idris.Elab.Clause
-import Idris.Elab.Value
-import Idris.Elab.Term
-import Idris.ModeCommon
-import Idris.Info
-
-import Version_idris (gitHash)
-import Util.System
-import Util.DynamicLinker
-import Util.Net (listenOnLocalhost, listenOnLocalhostAnyPort)
-import Util.Pretty hiding ((</>))
-
+import Idris.Completion
+import Idris.Core.Constraints
 import Idris.Core.Evaluate
 import Idris.Core.Execute (execute)
 import Idris.Core.TT
 import Idris.Core.Unify
 import Idris.Core.WHNF
-import Idris.Core.Constraints
-
+import Idris.Coverage
+import Idris.Delaborate
+import Idris.Docs hiding (Doc)
+import Idris.Docstrings (overview, renderDocTerm, renderDocstring)
+import Idris.Elab.Clause
+import Idris.Elab.Term
+import Idris.Elab.Value
+import Idris.ElabDecls
+import Idris.Error
+import Idris.ErrReverse
+import Idris.Help
+import Idris.IBC
+import qualified Idris.IdeMode as IdeMode
+import Idris.IdrisDoc
+import Idris.Info
+import Idris.Inliner
+import Idris.Interactive
+import Idris.ModeCommon
+import Idris.Output
+import Idris.Parser hiding (indent)
+import Idris.Prover
+import Idris.REPL.Browse (namesInNS, namespacesInNS)
+import Idris.REPL.Commands
+import Idris.REPL.Parser
+import Idris.TypeSearch (searchByType)
+import Idris.WhoCalls
 import IRTS.Compiler
 
+import Util.DynamicLinker
+import Util.Net (listenOnLocalhost, listenOnLocalhostAnyPort)
+import Util.Pretty hiding ((</>))
+import Util.System
+
+import Version_idris (gitHash)
+
+import Prelude hiding (id, (.), (<$>))
+
 import Control.Category
-import qualified Control.Exception as X
-import Prelude hiding ((<$>), (.), id)
-import Data.List.Split (splitOn)
-import qualified Data.Text as T
-
-import Text.Trifecta.Result(Result(..), ErrInfo(..))
-
-import System.Console.Haskeline as H
-import System.FilePath
-import System.Exit
-import System.Environment
-import System.Process
-import System.Directory
-import System.IO
-import Control.Monad
-import Control.Monad.Trans.Except (ExceptT, runExceptT)
-import Control.Monad.Trans.State.Strict ( StateT, execStateT, evalStateT, get, put )
-import Control.Monad.Trans ( lift )
-import Control.Concurrent.MVar
-import Network
 import Control.Concurrent
-import Data.Maybe
-import Data.List hiding (group)
-import Data.Char
-import qualified Data.Set as S
-import Data.Version
-import Data.Either (partitionEithers)
-import Control.DeepSeq
-
 import Control.Concurrent.Async (race)
-import System.FSNotify (withManager, watchDir)
+import Control.Concurrent.MVar
+import Control.DeepSeq
+import qualified Control.Exception as X
+import Control.Monad
+import Control.Monad.Trans (lift)
+import Control.Monad.Trans.Except (ExceptT, runExceptT)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, execStateT, get,
+                                         put)
+import Data.Char
+import Data.Either (partitionEithers)
+import Data.List hiding (group)
+import Data.List.Split (splitOn)
+import Data.Maybe
+import qualified Data.Set as S
+import qualified Data.Text as T
+import Data.Version
+import Network
+import System.Console.Haskeline as H
+import System.Directory
+import System.Environment
+import System.Exit
+import System.FilePath (addExtension, dropExtension, splitExtension,
+                        takeDirectory, takeExtension, (<.>), (</>))
+import System.FSNotify (watchDir, withManager)
 import System.FSNotify.Devel (allEvents, doAllEvents)
-
-
+import System.IO
+import System.Process
+import Text.Trifecta.Result (ErrInfo(..), Result(..))
 
 -- | Run the REPL
 repl :: IState -- ^ The initial state
@@ -154,7 +149,7 @@ repl orig mods efile
                               else show n
 
 -- | Run the REPL server
-startServer :: PortID -> IState -> [FilePath] -> Idris ()
+startServer :: PortNumber -> IState -> [FilePath] -> Idris ()
 startServer port orig fn_in = do tid <- runIO $ forkIO (serverLoop port)
                                  return ()
   where serverLoop port = withSocketsDo $
@@ -213,10 +208,10 @@ processNetCmd orig i h fn cmd
            IdeMode n _ -> ist {idris_outputmode = IdeMode n h}
 
 -- | Run a command on the server on localhost
-runClient :: Maybe PortID -> String -> IO ()
+runClient :: Maybe PortNumber -> String -> IO ()
 runClient port str = withSocketsDo $ do
               let port' = fromMaybe defaultPort port
-              res <- X.try (connectTo "localhost" port')
+              res <- X.try (connectTo "localhost" $ PortNumber port')
               case res of
                 Right h -> do
                   hSetEncoding h utf8
@@ -904,8 +899,8 @@ process fn (NewDefn decls) = do
   fixClauses :: PDecl' t -> PDecl' t
   fixClauses (PClauses fc opts _ css@(clause:cs)) =
     PClauses fc opts (getClauseName clause) css
-  fixClauses (PInstance doc argDocs syn fc constraints pnames acc opts cls nfc parms pextra ty instName decls) =
-    PInstance doc argDocs syn fc constraints pnames acc opts cls nfc parms pextra ty instName (map fixClauses decls)
+  fixClauses (PImplementation doc argDocs syn fc constraints pnames acc opts cls nfc parms pextra ty implName decls) =
+    PImplementation doc argDocs syn fc constraints pnames acc opts cls nfc parms pextra ty implName (map fixClauses decls)
   fixClauses decl = decl
 
   info = recinfo (fileFC "toplevel")
@@ -929,7 +924,7 @@ process fn (Undefine names) = undefine names
          else do tclift $ tfail $ Msg ("Can't undefine " ++ show n ++ " because it wasn't defined at the repl")
                  undefine' names already
     undefOne n = do fputState (ctxt_lookup n . known_terms) Nothing
-                    -- for now just assume it's a class. Eventually we'll want some kind of
+                    -- for now just assume it's an interface. Eventually we'll want some kind of
                     -- smart detection of exactly what kind of name we're undefining.
                     fputState (ctxt_lookup n . known_interfaces) Nothing
                     fmodifyState repl_definitions (delete n)
@@ -1512,7 +1507,7 @@ pprintDef asCore n =
                   let ppTm t = annotate (AnnTerm (zip vars (repeat False)) t) .
                                pprintPTerm (ppOptionIst ist)
                                      (zip vars (repeat False))
-                                     [] [] .
+                                     [] (idris_infixes ist) .
                                delab ist $
                                t
                   in group $ ppTm lhs <+> text "=" <$> (group . align . hang 2 $ ppTm rhs)

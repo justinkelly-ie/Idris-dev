@@ -5,53 +5,48 @@ Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
-{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, DeriveFunctor,
-             DeriveDataTypeable, DeriveGeneric, TypeSynonymInstances,
-             PatternGuards #-}
+{-# LANGUAGE DeriveDataTypeable, DeriveFunctor, DeriveGeneric,
+             FlexibleInstances, MultiParamTypeClasses, PatternGuards,
+             TypeSynonymInstances #-}
 
 module Idris.AbsSyntaxTree where
 
-import Idris.Core.TT
-import Idris.Core.Evaluate
+import Idris.Colours
 import Idris.Core.Elaborate hiding (Tactic(..))
+import Idris.Core.Evaluate
+import Idris.Core.TT
 import Idris.Core.Typecheck
 import Idris.Docstrings
-import IRTS.Lang
 import IRTS.CodegenCommon
-import Util.Pretty
+import IRTS.Lang
 import Util.DynamicLinker
-
-import Idris.Colours
-
-import System.Console.Haskeline
-import System.IO
+import Util.Pretty
 
 import Prelude hiding ((<$>))
 
 import Control.Applicative ((<|>))
-
-import Control.Monad.Trans.State.Strict
-import Control.Monad.Trans.Except
 import qualified Control.Monad.Trans.Class as Trans (lift)
-
-import Data.Data (Data)
-import Data.Function (on)
-import Data.Generics.Uniplate.Data (universe, children)
-import Data.List hiding (group)
+import Control.Monad.Trans.Except
+import Control.Monad.Trans.State.Strict
 import Data.Char
-import qualified Data.Map.Strict as M
-import qualified Data.Text as T
+import Data.Data (Data)
 import Data.Either
-import qualified Data.Set as S
-import Data.Word (Word)
+import Data.Foldable (Foldable)
+import Data.Function (on)
+import Data.Generics.Uniplate.Data (children, universe)
+import Data.List hiding (group)
+import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
+import qualified Data.Set as S
+import qualified Data.Text as T
 import Data.Traversable (Traversable)
 import Data.Typeable
-import Data.Foldable (Foldable)
-import GHC.Generics (Generic)
-
+import Data.Word (Word)
 import Debug.Trace
-
+import GHC.Generics (Generic)
+import Network.Socket (PortNumber)
+import System.Console.Haskeline
+import System.IO
 import Text.PrettyPrint.Annotated.Leijen
 
 data ElabWhat = ETypes | EDefns | EAll
@@ -297,7 +292,7 @@ data IState = IState {
   , idris_repl_defs              :: [Name]
 
   -- | Stack of names currently being elaborated, Bool set if it's an
-  -- instance (instances appear twice; also as a funtion name)
+  -- implementation (implementations appear twice; also as a funtion name)
   , elab_stack                   :: [(Name, Bool)]
 
 
@@ -320,7 +315,6 @@ data SizeChange = Smaller | Same | Bigger | Unknown
     deriving (Show, Eq, Generic)
 {-!
 deriving instance Binary SizeChange
-deriving instance NFData SizeChange
 !-}
 
 type SCGEntry = (Name, [Maybe (Int, SizeChange)])
@@ -333,7 +327,6 @@ data CGInfo = CGInfo {
   } deriving (Show, Generic)
 {-!
 deriving instance Binary CGInfo
-deriving instance NFData CGInfo
 !-}
 
 primDefs = [ sUN "unsafePerformPrimIO"
@@ -349,7 +342,7 @@ data IBCWrite = IBCFix FixDecl
               | IBCStatic Name
               | IBCInterface Name
               | IBCRecord Name
-              | IBCInstance Bool Bool Name Name
+              | IBCImplementation Bool Bool Name Name
               | IBCDSL Name
               | IBCData Name
               | IBCOpt Name
@@ -428,9 +421,6 @@ throwError = Trans.lift . throwE
 data Codegen = Via IRFormat String
              | Bytecode
     deriving (Show, Eq, Generic)
-{-!
-deriving instance NFData Codegen
-!-}
 
 data IRFormat = IBCFormat | JSONFormat deriving (Show, Eq, Generic)
 
@@ -496,7 +486,8 @@ data Opt = Filename String
          | IdemodeSocket
          | ShowAll
          | ShowLibs
-         | ShowLibdir
+         | ShowLibDir
+         | ShowDocDir
          | ShowIncs
          | ShowPkgs
          | ShowLoggingCats
@@ -519,7 +510,7 @@ data Opt = Filename String
          | ErrContext
          | ShowImpl
          | Verbose
-         | Port String -- ^ REPL TCP port
+         | Port REPLPort -- ^ REPL TCP port
          | IBCSubDir String
          | ImportDir String
          | SourceDir String
@@ -528,7 +519,8 @@ data Opt = Filename String
          | PkgClean String
          | PkgCheck String
          | PkgREPL String
-         | PkgMkDoc String -- IdrisDoc
+         | PkgDocBuild String -- IdrisDoc
+         | PkgDocInstall String
          | PkgTest String
          | PkgIndex FilePath
          | WarnOnly
@@ -558,6 +550,9 @@ data Opt = Filename String
          | NoOldTacticDeprecationWarnings -- ^ Don't show deprecation warnings for old-style tactics
     deriving (Show, Eq, Generic)
 
+data REPLPort = DontListen | ListenPort PortNumber
+  deriving (Eq, Generic, Show)
+
 -- Parsed declarations
 
 data Fixity = Infixl  { prec :: Int }
@@ -567,7 +562,6 @@ data Fixity = Infixl  { prec :: Int }
     deriving (Eq, Generic)
 {-!
 deriving instance Binary Fixity
-deriving instance NFData Fixity
 !-}
 
 instance Show Fixity where
@@ -584,7 +578,6 @@ instance Show FixDecl where
 
 {-!
 deriving instance Binary FixDecl
-deriving instance NFData FixDecl
 !-}
 
 instance Ord FixDecl where
@@ -595,7 +588,6 @@ data Static = Static | Dynamic
   deriving (Show, Eq, Data, Generic, Typeable)
 {-!
 deriving instance Binary Static
-deriving instance NFData Static
 !-}
 
 -- ^ Mark bindings with their explicitness, and laziness
@@ -620,7 +612,6 @@ data Plicity = Imp { pargopts  :: [ArgOpt]
 
 {-!
 deriving instance Binary Plicity
-deriving instance NFData Plicity
 !-}
 
 is_scoped :: Plicity -> Maybe ImplicitInfo
@@ -647,9 +638,10 @@ data FnOpt = Inlinable -- ^ always evaluate when simplifying
            | TotalFn | PartialFn | CoveringFn
            | Coinductive | AssertTotal
 
-           -- | type class dictionary, eval only when a function
+           -- | interface dictionary, eval only when a function
            -- argument, and further evaluation results.
            | Dictionary
+           | OverlappingDictionary -- ^ Interface dictionary which may overlap
            | Implicit                       -- ^ implicit coercion
            | NoImplicit                     -- ^ do not apply implicit coercions
            | CExport String                 -- ^ export, with a C name
@@ -664,7 +656,6 @@ data FnOpt = Inlinable -- ^ always evaluate when simplifying
     deriving (Show, Eq, Generic)
 {-!
 deriving instance Binary FnOpt
-deriving instance NFData FnOpt
 !-}
 
 type FnOpts = [FnOpt]
@@ -684,7 +675,7 @@ data ProvideWhat' t = ProvTerm t t     -- ^ the first is the goal type, the seco
 type ProvideWhat = ProvideWhat' PTerm
 
 -- | Top-level declarations such as compiler directives, definitions,
--- datatypes and typeclasses.
+-- datatypes and interfaces.
 data PDecl' t
    -- | Fixity declaration
    = PFix FC Fixity [String]
@@ -717,37 +708,37 @@ data PDecl' t
              (Docstring (Either Err t)) -- Constructor doc
              SyntaxInfo -- Constructor SyntaxInfo
 
-   -- | Type class: arguments are documentation, syntax info, source
-   -- location, constraints, class name, class name location,
+   -- | Interface: arguments are documentation, syntax info, source
+   -- location, constraints, interface name, interface name location,
    -- parameters, method declarations, optional constructor name
    | PInterface (Docstring (Either Err t)) SyntaxInfo FC
             [(Name, t)]                        -- constraints
-            Name                               -- class name
-            FC                                 -- accurate location of class name
+            Name                               -- interface name
+            FC                                 -- accurate location of interface name
             [(Name, FC, t)]                    -- parameters and precise locations
             [(Name, Docstring (Either Err t))] -- parameter docstrings
             [(Name, FC)]                       -- determining parameters and precise locations
             [PDecl' t]                         -- declarations
-            (Maybe (Name, FC))                 -- instance constructor name and location
-            (Docstring (Either Err t))         -- instance constructor docs
+            (Maybe (Name, FC))                 -- implementation constructor name and location
+            (Docstring (Either Err t))         -- implementation constructor docs
 
-   -- | Instance declaration: arguments are documentation, syntax
-   -- info, source location, constraints, class name, parameters, full
-   -- instance type, optional explicit name, and definitions
-   | PInstance (Docstring (Either Err t))         -- Instance docs
-               [(Name, Docstring (Either Err t))] -- Parameter docs
-               SyntaxInfo
-               FC [(Name, t)]                     -- constraints
-               [Name]                             -- parent dictionaries to search for constraints
-               Accessibility
-               FnOpts
-               Name                               -- class
-               FC                                 -- precise location of class
-               [t]                                -- parameters
-               [(Name, t)]                        -- Extra names in scope in the body
-               t                                  -- full instance type
-               (Maybe Name)                       -- explicit name
-               [PDecl' t]
+   -- | Implementation declaration: arguments are documentation, syntax
+   -- info, source location, constraints, interface name, parameters, full
+   -- Implementation type, optional explicit name, and definitions
+   | PImplementation (Docstring (Either Err t))         -- Implementation docs
+                     [(Name, Docstring (Either Err t))] -- Parameter docs
+                     SyntaxInfo
+                     FC [(Name, t)]                     -- constraints
+                     [Name]                             -- parent dictionaries to search for constraints
+                     Accessibility
+                     FnOpts
+                     Name                               -- interface
+                     FC                                 -- precise location of interface
+                     [t]                                -- parameters
+                     [(Name, t)]                        -- Extra names in scope in the body
+                     t                                  -- full Implementation type
+                     (Maybe Name)                       -- explicit name
+                     [PDecl' t]
    | PDSL     Name (DSL' t) -- ^ DSL declaration
    | PSyntax  FC Syntax     -- ^ Syntax definition
    | PMutual  FC [PDecl' t] -- ^ Mutual block
@@ -767,7 +758,6 @@ data PDecl' t
  deriving (Functor, Generic)
 {-!
 deriving instance Binary PDecl'
-deriving instance NFData PDecl'
 !-}
 
 -- | The set of source directives
@@ -797,7 +787,7 @@ data Directive = DLib Codegen String
 -- after a term elaboration when there's been reflected elaboration.
 data RDeclInstructions = RTyDeclInstrs Name FC [PArg] Type
                        | RClausesInstrs Name [([(Name, Term)], Term, Term)]
-                       | RAddInstance Name Name
+                       | RAddImplementation Name Name
                        | RDatatypeDeclInstrs Name [PArg]
                        -- | Datatype, constructors
                        | RDatatypeDefnInstrs Name Type [(Name, [PArg], Type)]
@@ -839,7 +829,6 @@ data PClause' t = PClause  FC Name t [t] t                    [PDecl' t] -- ^ A 
     deriving (Functor, Generic)
 {-!
 deriving instance Binary PClause'
-deriving instance NFData PClause'
 !-}
 
 -- | Data declaration
@@ -869,7 +858,6 @@ mapPDataFC f g (PLaterdecl n nfc tycon) =
   PLaterdecl n (g nfc) (mapPTermFC f g tycon)
 {-!
 deriving instance Binary PData'
-deriving instance NFData PData'
 !-}
 
 -- Handy to get a free function for applying PTerm -> PTerm functions
@@ -921,14 +909,14 @@ mapPDeclFC f g (PInterface doc syn fc constrs n nfc params paramDocs det body ct
            (map (mapPDeclFC f g) body)
            (fmap (\(n, nfc) -> (n, g nfc)) ctor)
            ctorDoc
-mapPDeclFC f g (PInstance doc paramDocs syn fc constrs pnames cn acc opts cnfc params pextra instTy instN body) =
-    PInstance doc paramDocs syn (f fc)
-              (map (\(constrN, constrT) -> (constrN, mapPTermFC f g constrT)) constrs)
-              pnames cn acc opts (g cnfc) (map (mapPTermFC f g) params)
-              (map (\(en, et) -> (en, mapPTermFC f g et)) pextra)
-              (mapPTermFC f g instTy)
-              instN
-              (map (mapPDeclFC f g) body)
+mapPDeclFC f g (PImplementation doc paramDocs syn fc constrs pnames cn acc opts cnfc params pextra implTy implN body) =
+    PImplementation doc paramDocs syn (f fc)
+                    (map (\(constrN, constrT) -> (constrN, mapPTermFC f g constrT)) constrs)
+                    pnames cn acc opts (g cnfc) (map (mapPTermFC f g) params)
+                    (map (\(en, et) -> (en, mapPTermFC f g et)) pextra)
+                    (mapPTermFC f g implTy)
+                    implN
+                    (map (mapPDeclFC f g) body)
 mapPDeclFC f g (PDSL n dsl) = PDSL n (fmap (mapPTermFC f g) dsl)
 mapPDeclFC f g (PSyntax fc syn) = PSyntax (f fc) $
                                     case syn of
@@ -966,7 +954,7 @@ declared (POpenInterfaces _ _ ds) = concatMap declared ds
 declared (PNamespace _ _ ds) = concatMap declared ds
 declared (PRecord _ _ _ _ n  _ _ _ _ cn _ _) = n : map fst (maybeToList cn)
 declared (PInterface _ _ _ _ n _ _ _ _ ms cn cd) = n : (map fst (maybeToList cn) ++ concatMap declared ms)
-declared (PInstance _ _ _ _ _ _ _ _ _ _ _ _ _ mn _)
+declared (PImplementation _ _ _ _ _ _ _ _ _ _ _ _ _ mn _)
     = case mn of
            Nothing -> []
            Just n -> [n]
@@ -990,7 +978,7 @@ tldeclared (POpenInterfaces _ _ ds)               = concatMap tldeclared ds
 tldeclared (PMutual _ ds)                         = concatMap tldeclared ds
 tldeclared (PNamespace _ _ ds)                    = concatMap tldeclared ds
 tldeclared (PInterface _ _ _ _ n _ _ _ _ ms cn _)     = n : (map fst (maybeToList cn) ++ concatMap tldeclared ms)
-tldeclared (PInstance _ _ _ _ _ _ _ _ _ _ _ _ _ mn _)
+tldeclared (PImplementation _ _ _ _ _ _ _ _ _ _ _ _ _ mn _)
     = case mn of
            Nothing -> []
            Just n -> [n]
@@ -1010,7 +998,7 @@ defined (POpenInterfaces _ _ ds)                  = concatMap defined ds
 defined (PNamespace _ _ ds)                       = concatMap defined ds
 defined (PRecord _ _ _ _ n _ _ _ _ cn _ _)        = n : map fst (maybeToList cn)
 defined (PInterface _ _ _ _ n _ _ _ _ ms cn _)        = n : (map fst (maybeToList cn) ++ concatMap defined ms)
-defined (PInstance _ _ _ _ _ _ _ _ _ _ _ _ _ mn _)
+defined (PImplementation _ _ _ _ _ _ _ _ _ _ _ _ _ mn _)
     = case mn of
            Nothing -> []
            Just n -> [n]
@@ -1067,7 +1055,7 @@ data PTerm = PQuote Raw         -- ^ Inclusion of a core term into the
            | PIfThenElse FC PTerm PTerm PTerm    -- ^ Conditional expressions - elaborated to an overloading of ifThenElse
            | PCase FC PTerm [(PTerm, PTerm)]     -- ^ A case expression. Args are source location, scrutinee, and a list of pattern/RHS pairs
            | PTrue FC PunInfo                    -- ^ Unit type..?
-           | PResolveTC FC                       -- ^ Solve this dictionary by type class resolution
+           | PResolveTC FC                       -- ^ Solve this dictionary by interface resolution
            | PRewrite FC (Maybe Name) PTerm PTerm (Maybe PTerm)
              -- ^ "rewrite" syntax, with optional rewriting function and
              -- optional result type
@@ -1174,7 +1162,6 @@ mapPTermFC f g (PQuoteName n x fc)            = PQuoteName n x (g fc)
 
 {-!
 dg instance Binary PTerm
-deriving instance NFData PTerm
 !-}
 
 mapPT :: (PTerm -> PTerm) -> PTerm -> PTerm
@@ -1212,7 +1199,7 @@ data PTactic' t = Intro [Name] | Intros | Focus Name
                 | Unfocus
                 | MatchRefine Name
                 | LetTac Name t | LetTacTy Name t t
-                | Exact t | Compute | Trivial | TCInstance
+                | Exact t | Compute | Trivial | TCImplementation
                 | ProofSearch Bool Bool Int (Maybe Name)
                               [Name] -- allowed local names
                               [Name] -- hints
@@ -1238,7 +1225,6 @@ data PTactic' t = Intro [Name] | Intros | Focus Name
     deriving (Show, Eq, Functor, Foldable, Traversable, Data, Generic, Typeable)
 {-!
 deriving instance Binary PTactic'
-deriving instance NFData PTactic'
 !-}
 instance Sized a => Sized (PTactic' a) where
   size (Intro nms)      = 1 + size nms
@@ -1273,7 +1259,7 @@ instance Sized a => Sized (PTactic' a) where
   size Unfocus          = 1
   size (MatchRefine x)  = 1 + size x
   size (LetTacTy x y z) = 1 + size x + size y + size z
-  size TCInstance       = 1
+  size TCImplementation       = 1
 
 type PTactic = PTactic' PTerm
 
@@ -1285,7 +1271,6 @@ data PDo' t = DoExp  FC t
     deriving (Eq, Functor, Data, Generic, Typeable)
 {-!
 deriving instance Binary PDo'
-deriving instance NFData PDo'
 !-}
 
 instance Sized a => Sized (PDo' a) where
@@ -1339,7 +1324,6 @@ instance Sized a => Sized (PArg' a) where
 
 {-!
 deriving instance Binary PArg'
-deriving instance NFData PArg'
 !-}
 
 pimp n t mach = PImp 1 mach [] n t
@@ -1408,20 +1392,20 @@ highestFC (PRunElab fc _ _)       = Just fc
 highestFC (PConstSugar fc _)      = Just fc
 highestFC (PAppImpl t _)          = highestFC t
 
--- Type class data
+-- Interface data
 
 data InterfaceInfo = CI {
-    instanceCtorName                   :: Name
+    implementationCtorName                   :: Name
   , interface_methods                  :: [(Name, (Bool, FnOpts, PTerm))] -- ^ flag whether it's a "data" method
   , interface_defaults                 :: [(Name, (Name, PDecl))]         -- ^ method name -> default impl
   , interface_default_super_interfaces :: [PDecl]
+  , interface_impparams                :: [Name]
   , interface_params                   :: [Name]
-  , interface_instances                :: [(Name, Bool)] -- ^ the Bool is whether to include in instance search, so named instances are excluded
+  , interface_implementations          :: [(Name, Bool)] -- ^ the Bool is whether to include in implementation search, so named implementations are excluded
   , interface_determiners              :: [Int]
   } deriving (Show, Generic)
 {-!
 deriving instance Binary InterfaceInfo
-deriving instance NFData InterfaceInfo
 !-}
 
 -- Record data
@@ -1442,7 +1426,6 @@ data FnInfo = FnInfo { fn_params :: [Int] }
     deriving (Show, Generic)
 {-!
 deriving instance Binary FnInfo
-deriving instance NFData FnInfo
 !-}
 
 data OptInfo = Optimise {
@@ -1451,7 +1434,6 @@ data OptInfo = Optimise {
   } deriving (Show, Generic)
 {-!
 deriving instance Binary OptInfo
-deriving instance NFData OptInfo
 !-}
 
 -- | Syntactic sugar info
@@ -1468,7 +1450,6 @@ data DSL' t = DSL {
   } deriving (Show, Functor, Generic)
 {-!
 deriving instance Binary DSL'
-deriving instance NFData DSL'
 !-}
 
 type DSL = DSL' PTerm
@@ -1479,7 +1460,6 @@ data SynContext = PatternSyntax
     deriving (Show, Generic)
 {-!
 deriving instance Binary SynContext
-deriving instance NFData SynContext
 !-}
 
 data Syntax = Rule [SSymbol] PTerm SynContext
@@ -1499,7 +1479,6 @@ syntaxSymbols (Rule ss _ _) = ss
 syntaxSymbols (DeclRule ss _) = ss
 {-!
 deriving instance Binary Syntax
-deriving instance NFData Syntax
 !-}
 
 data SSymbol = Keyword Name
@@ -1512,7 +1491,6 @@ data SSymbol = Keyword Name
 
 {-!
 deriving instance Binary SSymbol
-deriving instance NFData SSymbol
 !-}
 
 newtype SyntaxRules = SyntaxRules { syntaxRulesList :: [Syntax] }
@@ -1534,7 +1512,7 @@ updateSyntaxRules rules (SyntaxRules sr) = SyntaxRules newRules
         EQ -> ruleSort ss1 ss2
         r -> r
 
-    -- Better than creating Ord instance for SSymbol since
+    -- Better than creating Ord implementation for SSymbol since
     -- in general this ordering does not really make sense.
     symCompare (Keyword n1) (Keyword n2)        = compare n1 n2
     symCompare (Keyword _) _                    = LT
@@ -1572,7 +1550,6 @@ data Using = UImplicit Name PTerm
     deriving (Show, Eq, Data, Generic, Typeable)
 {-!
 deriving instance Binary Using
-deriving instance NFData Using
 !-}
 
 data SyntaxInfo = Syn {
@@ -1581,7 +1558,7 @@ data SyntaxInfo = Syn {
   , syn_namespace     :: [String]
   , no_imp            :: [Name]
   , imp_methods       :: [Name]
-  -- ^ class methods. When expanding implicits, these should be
+  -- ^ interface methods. When expanding implicits, these should be
   -- expanded even under binders
   , decoration        :: Name -> Name
   , inPattern         :: Bool
@@ -1595,7 +1572,6 @@ data SyntaxInfo = Syn {
   , withAppAllowed    :: Bool
   } deriving (Show, Generic)
 {-!
-deriving instance NFData SyntaxInfo
 deriving instance Binary SyntaxInfo
 !-}
 
@@ -1716,7 +1692,7 @@ piBindp p ((n, ty):ns) t = PPi p n NoFC ty (piBindp p ns t)
 
 -- Pretty-printing declarations and terms
 
--- These "show" instances render to an absurdly wide screen because inserted line breaks
+-- These "show" implementations render to an absurdly wide screen because inserted line breaks
 -- could interfere with interactive editing, which calls "show".
 
 instance Show PTerm where
@@ -1783,7 +1759,7 @@ prettyImp :: PPOption -- ^ pretty printing options
           -> Doc OutputAnnotation
 prettyImp impl = pprintPTerm impl [] [] []
 
--- | Serialise something to base64 using its Binary instance.
+-- | Serialise something to base64 using its Binary implementation.
 
 -- | Do the right thing for rendering a term in an IState
 prettyIst ::  IState -> PTerm -> Doc OutputAnnotation
@@ -1954,7 +1930,7 @@ pprintPTerm ppo bnd docArgs infixes = prettySe (ppopt_depth ppo) startPrec bnd
         , kwd "else" <+> prettySe (decD d) startPrec bnd f
         ]
     prettySe d p bnd (PHidden tm)         = text "." <> prettySe (decD d) funcAppPrec bnd tm
-    prettySe d p bnd (PResolveTC _)       = kwd "%instance"
+    prettySe d p bnd (PResolveTC _)       = kwd "%implementation"
     prettySe d p bnd (PTrue _ IsType)     = annName unitTy $ text "()"
     prettySe d p bnd (PTrue _ IsTerm)     = annName unitCon $ text "()"
     prettySe d p bnd (PTrue _ TypeOrTerm) = text "()"
@@ -2238,7 +2214,7 @@ showDeclImp o (PNamespace n fc ps)  = text "namespace" <+> text n <> braces (lin
 showDeclImp _ (PSyntax _ syn) = text "syntax" <+> text (show syn)
 showDeclImp o (PInterface _ _ _ cs n _ ps _ _ ds _ _)
    = text "interface" <+> text (show cs) <+> text (show n) <+> text (show ps) <> line <> showDecls o ds
-showDeclImp o (PInstance _ _ _ _ cs _ acc _ n _ _ _ t _ ds)
+showDeclImp o (PImplementation _ _ _ _ cs _ acc _ n _ _ _ t _ ds)
    = text "implementation" <+> text (show cs) <+> text (show n) <+> prettyImp o t <> line <> showDecls o ds
 showDeclImp _ _ = text "..."
 -- showDeclImp (PImport o) = "import " ++ o

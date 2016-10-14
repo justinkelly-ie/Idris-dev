@@ -6,7 +6,7 @@ import Effect.State
 data BTree a = Leaf
              | Node (BTree a) a (BTree a)
 
-instance Show a => Show (BTree a) where
+implementation Show a => Show (BTree a) where
   show Leaf = "[]"
   show (Node l x r) = "[" ++ show l ++ " "
                           ++ show x ++ " "
@@ -20,13 +20,13 @@ testTree = Node (Node Leaf "Jim" Leaf)
                       (Node Leaf "Bob" Leaf))
 
 treeTagAux : BTree a -> { [STATE Int] } Eff (BTree (Int, a))
-treeTagAux Leaf = return Leaf
+treeTagAux Leaf = pure Leaf
 treeTagAux (Node l x r)
     = do l' <- treeTagAux l
          i <- get
          put (i + 1)
          r' <- treeTagAux r
-         return (Node l' (i, x) r')
+         pure (Node l' (i, x) r')
 
 treeTag : (i : Int) -> BTree a -> BTree (Int, a)
 treeTag i x = runPure (do put i

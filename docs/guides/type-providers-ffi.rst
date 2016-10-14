@@ -53,8 +53,8 @@ actions. Let's write a simple one now:
       putStrLn "I'm sorry, I don't know how big size_t is. Can you tell me, in bytes?"
       resp <- getLine
       case readInt resp of
-         Just sizeTSize => return (Provide sizeTSize)
-         Nothing => return (Error "I'm sorry, I don't understand.")
+         Just sizeTSize => pure (Provide sizeTSize)
+         Nothing => pure (Error "I'm sorry, I don't understand.")
     -- the readInt function is left as an exercise
 
 We assume that whoever's compiling the library knows the size of
@@ -209,7 +209,7 @@ Next, an Idris file to define our providers:
     -- stat types.
     data BitWidth = B8 | B16 | B32 | B64
 
-    instance Show BitWidth where
+    implementation Show BitWidth where
       show B8 = "8 bits"
       show B16 = "16 bits"
       show B32 = "32 bits"

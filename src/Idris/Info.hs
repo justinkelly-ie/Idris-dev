@@ -6,7 +6,11 @@ License     : BSD3
 Maintainer  : The Idris Community.
 -}
 module Idris.Info
-  ( getIdrisLibDir
+  ( getIdrisDataDir
+  , getIdrisCRTSDir
+  , getIdrisJSRTSDir
+  , getIdrisLibDir
+  , getIdrisDocDir
   , getIdrisFlagsLib
   , getIdrisFlagsInc
   , getIdrisFlagsEnv
@@ -20,18 +24,27 @@ module Idris.Info
   , getIdrisLoggingCategories
   ) where
 
-import System.FilePath
-import System.Directory
-import Data.Version
-
-import Idris.Imports (installedPackages)
 import Idris.AbsSyntax (loggingCatsStr)
-
+import Idris.Imports (installedPackages)
 import qualified IRTS.System as S
 
+import Paths_idris
 import Version_idris (gitHash)
 
-import Paths_idris
+import Data.Version
+import System.Directory
+import System.FilePath
+getIdrisDataDir :: IO String
+getIdrisDataDir = S.getIdrisDataDir
+
+getIdrisCRTSDir :: IO String
+getIdrisCRTSDir = S.getIdrisCRTSDir
+
+getIdrisJSRTSDir :: IO String
+getIdrisJSRTSDir = S.getIdrisJSRTSDir
+
+getIdrisDocDir :: IO String
+getIdrisDocDir = S.getIdrisDocDir
 
 getIdrisLibDir :: IO String
 getIdrisLibDir = S.getIdrisLibDir

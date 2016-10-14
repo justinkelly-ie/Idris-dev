@@ -58,6 +58,10 @@ unsafeSend (MkConc pid ch_id) val
 ||| a protocol (externally checked) which ensures that the message received
 ||| is of the type given by the sender.
 export
-unsafeRecv : (a : Type) -> Channel -> IO (Maybe a)
+unsafeRecv : (expected : Type) -> Channel -> IO (Maybe expected)
 unsafeRecv a (MkConc pid ch_id) = getMsgFrom {a} pid ch_id
 
+||| Exit the thread immediately
+export
+stopThread : IO a
+stopThread = Raw.stopThread 

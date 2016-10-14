@@ -9,6 +9,12 @@ Maintainer  : The Idris Community.
 {-# LANGUAGE PatternGuards, TupleSections                #-}
 module Idris.Parser.Expr where
 
+import Idris.AbsSyntax
+import Idris.Parser.Helpers
+import Idris.Parser.Ops
+import Idris.DSL
+import Idris.Core.TT
+
 import Prelude hiding (pi)
 
 import Text.Trifecta.Delta
@@ -18,18 +24,9 @@ import Text.Parser.Expression
 import qualified Text.Parser.Token as Tok
 import qualified Text.Parser.Char as Chr
 import qualified Text.Parser.Token.Highlight as Hi
-
-import Idris.AbsSyntax
-import Idris.Parser.Helpers
-import Idris.Parser.Ops
-import Idris.DSL
-
-import Idris.Core.TT
-
 import Control.Applicative
 import Control.Monad
 import Control.Monad.State.Strict
-
 import Data.Function (on)
 import Data.Maybe
 import qualified Data.List.Split as Spl
@@ -39,7 +36,6 @@ import Data.Char
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.ByteString.UTF8 as UTF8
-
 import Debug.Trace
 
 -- | Allow implicit type declarations
@@ -385,7 +381,7 @@ tacticsExpr syn = do kw <- reservedFC "tactics"
 SimpleExpr ::=
     {- External (User-defined) Simple Expression -}
   | '?' Name
-  | % 'instance'
+  | % 'implementation'
   | 'Refl' ('{' Expr '}')?
   | ProofExpr
   | TacticsExpr
@@ -409,7 +405,10 @@ simpleExpr syn =
             try (simpleExternalExpr syn)
         <|> do (x, FC f (l, c) end) <- try (lchar '?' *> name)
                return (PMetavar (FC f (l, c-1) end) x)
-        <|> do lchar '%'; fc <- getFC; reserved "instance"; return (PResolveTC fc)
+        <|> do lchar '%'; fc <- getFC; reserved "implementation"; return (PResolveTC fc)
+        <|> do lchar '%'; fc <- getFC; reserved "instance"
+               parserWarning fc Nothing $ Msg "The use of %instance is deprecated, use %implementation instead."
+               return (PResolveTC fc)
         <|> do reserved "elim_for"; fc <- getFC; t <- fst <$> fnName; return (PRef fc [] (SN $ ElimN t))
         <|> proofExpr syn
         <|> tacticsExpr syn
@@ -740,7 +739,7 @@ implicitArg syn = do lchar '{'
                      return (pimp n v True)
                   <?> "implicit function argument"
 
-{-| Parses a constraint argument (for selecting a named type class instance)
+{-| Parses a constraint argument (for selecting a named interface implementation)
 
 >    ConstraintArg ::=
 >      '@{' Expr '}'
@@ -1467,7 +1466,7 @@ verbatimStringLiteral = token $ do (FC f start _) <- getFC
 
 @
 Static ::=
-  '[' static ']'
+  '%static'
 ;
 @
 -}
@@ -1582,7 +1581,7 @@ tactics =
   , (["search"], Nothing, const $
       do depth <- option 10 $ fst <$> natural
          return (ProofSearch True True (fromInteger depth) Nothing [] []))
-  , noArgs ["instance"] TCInstance
+  , noArgs ["implementation"] TCImplementation
   , noArgs ["solve"] Solve
   , noArgs ["attack"] Attack
   , noArgs ["state", ":state"] ProofState

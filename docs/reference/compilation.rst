@@ -68,8 +68,8 @@ logging level between: 1 to 10 using the command-line option: ``--log
 
 + Level 0: Show no logging output. Default level
 + Level 1: High level details of the compilation process.
-+ Level 2: Provides details of the coverage checking, and further details the elaboration process specifically: Class, Clauses, Data, Term, and Types,
-+ Level 3: Provides details of compilation of the IRTS, erasure, parsing, case splitting, and further details elaboration of: Instances, Providers, and Values.
++ Level 2: Provides details of the coverage checking, and further details the elaboration process specifically: Interface, Clauses, Data, Term, and Types,
++ Level 3: Provides details of compilation of the IRTS, erasure, parsing, case splitting, and further details elaboration of: Implementations, Providers, and Values.
 + Level 4: Provides further details on: Erasure, Coverage Checking, Case splitting, and elaboration of clauses.
 + Level 5: Provides details on the prover, and further details elaboration (adding declarations) and compilation of the IRTS.
 + Level 6: Further details elaboration and coverage checking.
@@ -86,22 +86,30 @@ overridden through environment variables.  The provided variables are:
 
 * `IDRIS_CC` Change the `C` compiler used by the `C` backend.
 * `IDRIS_CFLAGS` Change the `C` flags passed to the `C` compiler.
-* `TARGET`   Change the target directory to generate files.
-* `IDRIS_LIBRARY_PATH` Change the location of where installed packages are found.
+* `TARGET`   Change the target directory i.e. `data dir` where Idris installs files when installing using Cabal/Stack.
+* `IDRIS_LIBRARY_PATH` Change the location of where installed packages are found/installed.
+* `IDRIS_DOC_PATH`  Change the location of where generated idrisdoc for packages are installed.
 
-Alternativly, and perhaps a cleaner approach is to configure these
-options using the CLI options.  Idris also supports options to augment
-the paths used, and pass options to the code generator backend.
+.. note::
 
-The option `--cg-opt <ARG>` can be used to pass options to the code
-generator. The format of `<ARG>` is dependent on the selected backend.
+   In versions of Idris prior to 0.12.3 the environment variables
+   `IDRIS_LIBRARY_PATH` and `TARGET` were both used to affect the
+   installation of single packages and direct where Idris installed
+   its data. The meaning of these variables has changed, and command
+   line options are preferred when changing where individual packages
+   are installed.
 
-Further, Idris does support multiple include paths.  The CLI option
-`-i <dir>` allows you to add a directory to the library search path; this
-option can be used multiple times. This is a cleaner option when you
-wish to add single directories to the `IDRIS_LIBRARY_PATH` than
-ammending `IDRIS_LIBRARY_PATH` directly.
-To add directories to the source search path, use the `--sourcepath <dir>` option.
+The CLI option `--ibcsubdir` can be used to direct where generated IBC
+files are placed.  However, this means Idris will install files in a
+non-standard location separate from the rest of the installed
+packages. The CLI option `--idrispath <dir>` allows you to add a
+directory to the library search path; this option can be used multiple
+times and can be shortened to `-i <dir>`. Similary, the `--sourcepath
+<dir>` option can be used to add directories to the source search
+path. There is no shortened version for this option as `-s` is a
+reserved flag.
 
-Moreover, rather than using `TARGET` the CLI option `--ibcsubdir` can
-be used to direct where built IBC files are placed.
+Further, Idris also supports options to augment the paths used, and
+pass options to the code generator backend.  The option `--cg-opt
+<ARG>` can be used to pass options to the code generator. The format
+of `<ARG>` is dependent on the selected backend.

@@ -19,13 +19,13 @@ module Idris.Core.Unify(
   , unrecoverable
   ) where
 
-import Idris.Core.TT
 import Idris.Core.Evaluate
+import Idris.Core.TT
 
 import Control.Monad
 import Control.Monad.State.Strict
-import Data.Maybe
 import Data.List
+import Data.Maybe
 import Debug.Trace
 
 -- terms which need to be injective, with the things we're trying to unify
@@ -193,13 +193,13 @@ match_unify ctxt env (topx, xfrom) (topy, yfrom) inj holes from =
 --           case boundVs (envPos x 0 env) tm of
 --                [] -> return [(x, tm)]
 --                (i:_) -> lift $ tfail (UnifyScope x (fst (fst (ns!!i)))
---                                      (inst ns tm) (errEnv env))
+--                                      (impl ns tm) (errEnv env))
         let v = highV (-1) tm in
             if v >= length ns
                then lift $ tfail (Msg "SCOPE ERROR")
                else return [(x, bind v ns tm)]
-      where inst [] tm = tm
-            inst ((n, _) : ns) tm = inst ns (substV (P Bound n Erased) tm)
+      where impl [] tm = tm
+            impl ((n, _) : ns) tm = impl ns (substV (P Bound n Erased) tm)
 
     bind i ns tm
       | i < 0 = tm
@@ -460,7 +460,7 @@ unify ctxt env (topx, xfrom) (topy, yfrom) inj holes usersupp from =
             substEnv ((n, t) : env) tm
                 = substEnv env (substV (P Bound n (binderTy t)) tm)
 
-            -- remove any unnecessary lambdas (helps with type class
+            -- remove any unnecessary lambdas (helps with interface
             -- resolution later).
             eta ks (Bind n (Lam ty) sc) = eta ((n, ty) : ks) sc
             eta ks t = rebind ks t
@@ -488,8 +488,8 @@ unify ctxt env (topx, xfrom) (topy, yfrom) inj holes usersupp from =
 --     un' env fn bnames (Bind x (PVTy _) sx) (Bind y (PVTy _) sy)
 --         = un' env False ((x,y):bnames) sx sy
 
-    -- f D unifies with t -> D. This is dubious, but it helps with type
-    -- class resolution for type classes over functions.
+    -- f D unifies with t -> D. This is dubious, but it helps with
+    -- interface resolution for interfaces over functions.
 
     un' env fn bnames (App _ f x) (Bind n (Pi i t k) y)
       | noOccurrence n y && injectiveApp f
@@ -667,13 +667,13 @@ unify ctxt env (topx, xfrom) (topy, yfrom) inj holes usersupp from =
 --           case boundVs (envPos x 0 env) tm of
 --                [] -> return [(x, tm)]
 --                (i:_) -> lift $ tfail (UnifyScope x (fst (fst (ns!!i)))
---                                      (inst ns tm) (errEnv env))
+--                                      (impl ns tm) (errEnv env))
         let v = highV (-1) tm in
             if v >= length ns
                then lift $ tfail (Msg "SCOPE ERROR")
                else return [(x, bind v ns tm)]
-      where inst [] tm = tm
-            inst (((n, _), _) : ns) tm = inst ns (substV (P Bound n Erased) tm)
+      where impl [] tm = tm
+            impl (((n, _), _) : ns) tm = impl ns (substV (P Bound n Erased) tm)
     checkScope ns (x, tm) = lift $ tfail (Msg "HOLE ERROR")
 
     bind i ns tm

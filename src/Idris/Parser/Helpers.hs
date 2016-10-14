@@ -5,50 +5,46 @@ Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
-{-# LANGUAGE CPP, GeneralizedNewtypeDeriving, ConstraintKinds #-}
-{-# LANGUAGE PatternGuards, StandaloneDeriving                 #-}
+{-# LANGUAGE CPP, ConstraintKinds, GeneralizedNewtypeDeriving, PatternGuards,
+             StandaloneDeriving #-}
 #if !(MIN_VERSION_base(4,8,0))
 {-# LANGUAGE OverlappingInstances #-}
 #endif
 module Idris.Parser.Helpers where
 
-import Prelude hiding (pi)
-
-import Text.Trifecta.Delta
-import Text.Trifecta hiding (span, stringLiteral, charLiteral, natural, symbol, char, string, whiteSpace, Err)
-import Text.Parser.LookAhead
-import Text.Parser.Expression
-import qualified Text.Parser.Token as Tok
-import qualified Text.Parser.Char as Chr
-import qualified Text.Parser.Token.Highlight as Hi
-
 import Idris.AbsSyntax
-
-import Idris.Core.TT
 import Idris.Core.Evaluate
+import Idris.Core.TT
 import Idris.Delaborate (pprintErr)
 import Idris.Docstrings
 import Idris.Output (iWarn)
 
 import qualified Util.Pretty as Pretty (text)
 
+import Prelude hiding (pi)
+
 import Control.Applicative
 import Control.Monad
 import Control.Monad.State.Strict
-
-import Data.Maybe
-import qualified Data.List.Split as Spl
-import Data.List
-import Data.Monoid
-import Data.Char
-import qualified Data.Map as M
-import qualified Data.HashSet as HS
-import qualified Data.Text as T
 import qualified Data.ByteString.UTF8 as UTF8
-
-import System.FilePath
-
+import Data.Char
+import qualified Data.HashSet as HS
+import Data.List
+import qualified Data.List.Split as Spl
+import qualified Data.Map as M
+import Data.Maybe
+import Data.Monoid
+import qualified Data.Text as T
 import Debug.Trace
+import System.FilePath
+import qualified Text.Parser.Char as Chr
+import Text.Parser.Expression
+import Text.Parser.LookAhead
+import qualified Text.Parser.Token as Tok
+import qualified Text.Parser.Token.Highlight as Hi
+import Text.Trifecta hiding (Err, char, charLiteral, natural, span, string,
+                      stringLiteral, symbol, whiteSpace)
+import Text.Trifecta.Delta
 
 -- | Idris parser with state used during parsing
 type IdrisParser = StateT IState IdrisInnerParser
@@ -676,7 +672,7 @@ addAcc n a = do i <- get
                 put (i { hide_list = addDef n a (hide_list i) })
 
 {- | Add accessbility option for data declarations
- (works for classes too - 'abstract' means the data/class is visible but members not) -}
+ (works for interfaces too - 'abstract' means the data/interface is visible but members not) -}
 accData :: Accessibility -> Name -> [Name] -> IdrisParser ()
 accData Frozen n ns = do addAcc n Public -- so that it can be used in public definitions
                          mapM_ (\n -> addAcc n Private) ns -- so that they are invisible
@@ -715,7 +711,7 @@ collect (PMutual f ms : ds) = PMutual f (collect ms) : collect ds
 collect (PNamespace ns fc ps : ds) = PNamespace ns fc (collect ps) : collect ds
 collect (PInterface doc f s cs n nfc ps pdocs fds ds cn cd : ds')
     = PInterface doc f s cs n nfc ps pdocs fds (collect ds) cn cd : collect ds'
-collect (PInstance doc argDocs f s cs pnames acc opts n nfc ps pextra t en ds : ds')
-    = PInstance doc argDocs f s cs pnames acc opts n nfc ps pextra t en (collect ds) : collect ds'
+collect (PImplementation doc argDocs f s cs pnames acc opts n nfc ps pextra t en ds : ds')
+    = PImplementation doc argDocs f s cs pnames acc opts n nfc ps pextra t en (collect ds) : collect ds'
 collect (d : ds) = d : collect ds
 collect [] = []

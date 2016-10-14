@@ -12,32 +12,31 @@ module Idris.Erasure (performUsageAnalysis, mkFieldName) where
 import Idris.AbsSyntax
 import Idris.ASTUtils
 import Idris.Core.CaseTree
-import Idris.Core.TT
 import Idris.Core.Evaluate
-import Idris.Primitives
+import Idris.Core.TT
 import Idris.Error
+import Idris.Primitives
 
-import Debug.Trace
-import System.IO.Unsafe
-
-import Control.Category
 import Prelude hiding (id, (.))
 
-import Control.Arrow
 import Control.Applicative
+import Control.Arrow
+import Control.Category
 import Control.Monad.State
-import Data.Maybe
-import Data.List
-import qualified Data.Set as S
-import qualified Data.IntSet as IS
-import qualified Data.Map as M
-import qualified Data.IntMap as IM
-import Data.Set (Set)
-import Data.IntSet (IntSet)
-import Data.Map (Map)
 import Data.IntMap (IntMap)
+import qualified Data.IntMap as IM
+import Data.IntSet (IntSet)
+import qualified Data.IntSet as IS
+import Data.List
+import Data.Map (Map)
+import qualified Data.Map as M
+import Data.Maybe
+import Data.Set (Set)
+import qualified Data.Set as S
 import Data.Text (pack)
 import qualified Data.Text as T
+import Debug.Trace
+import System.IO.Unsafe
 
 -- | UseMap maps names to the set of used (reachable) argument
 -- positions.
@@ -252,8 +251,8 @@ buildDepMap ci used externs ctx startNames
 
     -- get Deps for a Name
     getDeps :: Name -> Deps
-    getDeps (SN (WhereN i (SN (InstanceCtorN interfaceN)) (MN i' field)))
-        = M.empty  -- these deps are created when applying instance ctors
+    getDeps (SN (WhereN i (SN (ImplementationCtorN interfaceN)) (MN i' field)))
+        = M.empty  -- these deps are created when applying implementation ctors
     getDeps n = case lookupDefExact n ctx of
         Just def -> getDepsDef n def
         Nothing  -> error $ "erasure checker: unknown reference: " ++ show n
@@ -336,9 +335,9 @@ buildDepMap ci used externs ctx startNames
         -- this is safe because it's certainly a patvar
         varIdx = fromJust (viFunArg var)
 
-        -- generate metamethod names, "n" is the instance ctor
+        -- generate metamethod names, "n" is the implementation ctor
         meth :: Int -> Maybe Name
-        meth | SN (InstanceCtorN interfaceName) <- n = \j -> Just (mkFieldName n j)
+        meth | SN (ImplementationCtorN interfaceName) <- n = \j -> Just (mkFieldName n j)
              | otherwise = \j -> Nothing
 
     -- Named variables -> DeBruijn variables -> Conds/guards -> Term -> Deps
@@ -380,8 +379,8 @@ buildDepMap ci used externs ctx startNames
     -- applications may add items to Cond
     getDepsTerm vs bs cd app@(App _ _ _)
         | (fun, args) <- unApply app = case fun of
-            -- instance constructors -> create metamethod deps
-            P (DCon _ _ _) ctorName@(SN (InstanceCtorN interfaceName)) _
+            -- implementation constructors -> create metamethod deps
+            P (DCon _ _ _) ctorName@(SN (ImplementationCtorN interfaceName)) _
                 -> conditionalDeps ctorName args  -- regular data ctor stuff
                     `union` unionMap (methodDeps ctorName) (zip [0..] args)  -- method-specific stuff
 
@@ -486,7 +485,7 @@ buildDepMap ci used externs ctx startNames
                 then length $ getArgTys (argTys !! i)
                 else error $ "invalid field number " ++ show i ++ " for " ++ show ctorName
 
-        | otherwise = error $ "unknown instance constructor: " ++ show ctorName
+        | otherwise = error $ "unknown implementation constructor: " ++ show ctorName
 
     getArity n = case lookupDefExact n ctx of
         Just (CaseOp ci ty tys def tot cdefs) -> length tys

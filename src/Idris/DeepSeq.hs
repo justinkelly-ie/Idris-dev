@@ -12,19 +12,20 @@ module Idris.DeepSeq(
   , module Idris.Core.DeepSeq
   ) where
 
-import Idris.Core.DeepSeq
-import Idris.Docstrings
-import Idris.Core.TT
 import Idris.AbsSyntaxTree
 import Idris.Colours
+import Idris.Core.DeepSeq
+import Idris.Core.TT
+import Idris.Docstrings
+import qualified Idris.Docstrings as D
+import IRTS.CodegenCommon (OutputType(..))
 import IRTS.Lang (PrimFn(..))
-import IRTS.CodegenCommon (OutputType (..))
+
 import Util.DynamicLinker
 
-import Control.DeepSeq
-
 import qualified Cheapskate.Types as CT
-import qualified Idris.Docstrings as D
+import Control.DeepSeq
+import Network.Socket (PortNumber)
 
 -- These types don't have Generic instances
 instance NFData CT.Options where
@@ -47,6 +48,9 @@ instance NFData DynamicLib where
 instance NFData IdrisColour where
   rnf (IdrisColour _ x2 x3 x4 x5) = rnf x2 `seq` rnf x3 `seq` rnf x4 `seq` rnf x5 `seq` ()
 
+instance NFData PortNumber where
+  rnf x = rnf $ show x
+
 -- Handle doesn't have an NFData instance
 instance NFData OutputMode where
   rnf (RawOutput x) = ()
@@ -57,6 +61,7 @@ instance NFData ConsoleWidth
 instance NFData PrimFn
 instance NFData SyntaxRules
 instance NFData Opt
+instance NFData REPLPort
 instance NFData TIData
 instance NFData IOption
 instance NFData LanguageExt

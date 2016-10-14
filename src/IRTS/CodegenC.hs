@@ -8,27 +8,27 @@ Maintainer  : The Idris Community.
 module IRTS.CodegenC (codegenC) where
 
 import Idris.AbsSyntax
+import Idris.Core.TT
 import IRTS.Bytecode
+import IRTS.CodegenCommon
+import IRTS.Defunctionalise
 import IRTS.Lang
 import IRTS.Simplified
-import IRTS.Defunctionalise
 import IRTS.System
-import IRTS.CodegenCommon
-import Idris.Core.TT
+
 import Util.System
 
-import Numeric
-import Data.Char
-import Data.Bits
-import Data.List (intercalate, nubBy)
-import System.Process
-import System.Exit
-import System.IO
-import System.Directory
-import System.FilePath ((</>), (<.>))
 import Control.Monad
-
+import Data.Bits
+import Data.Char
+import Data.List (intercalate, nubBy)
 import Debug.Trace
+import Numeric
+import System.Directory
+import System.Exit
+import System.FilePath ((<.>), (</>))
+import System.IO
+import System.Process
 
 codegenC :: CodeGenerator
 codegenC ci = do codegenC' (simpleDecls ci)
@@ -66,8 +66,8 @@ codegenC' defs out exec incs objs libs flags exports iface dbg
          let h = concatMap toDecl (map fst bc)
          let cc = concatMap (uncurry toC) bc
          let hi = concatMap ifaceC (concatMap getExp exports)
-         d <- getDataDir
-         mprog <- readFile (d </> "rts" </> "idris_main" <.> "c")
+         d <- getIdrisCRTSDir
+         mprog <- readFile (d </> "idris_main" <.> "c")
          let cout = headers incs ++ debug dbg ++ h ++ wrappers ++ cc ++
                      (if (exec == Executable) then mprog else hi)
          case exec of
@@ -340,6 +340,7 @@ bcc i (FOREIGNCALL l rty (FStr fn) args)
       = indent i ++
         c_irts (toFType rty) (creg l ++ " = ")
                    (fn ++ "(" ++ showSep "," (map fcall args) ++ ")") ++ ";\n"
+bcc i (FOREIGNCALL l rty _ args) = error "Foreign Function calls cannot be partially applied, without being inlined."
 bcc i (NULL r) = indent i ++ creg r ++ " = NULL;\n" -- clear, so it'll be GCed
 bcc i (ERROR str) = indent i ++ "fprintf(stderr, " ++ show str ++ "); fprintf(stderr, \"\\n\"); exit(-1);\n"
 -- bcc i c = error (show c) -- indent i ++ "// not done yet\n"

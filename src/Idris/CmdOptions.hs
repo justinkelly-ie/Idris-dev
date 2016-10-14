@@ -13,23 +13,24 @@ module Idris.CmdOptions
   , getPkgREPL, getPkgTest, getPort, getIBCSubDir
   ) where
 
+import Idris.AbsSyntax (getClient, getIBCSubDir, getPkg, getPkgCheck,
+                        getPkgClean, getPkgMkDoc, getPkgREPL, getPkgTest,
+                        getPort, opt)
 import Idris.AbsSyntaxTree
-import Idris.AbsSyntax (opt, getClient, getPkg, getPkgCheck, getPkgClean, getPkgMkDoc
-  , getPkgREPL, getPkgTest, getPort, getIBCSubDir)
--- import Idris.REPL
 import Idris.Info (getIdrisVersion)
-
+-- import Idris.REPL
 import IRTS.CodegenCommon
 
-import Options.Applicative
-import Options.Applicative.Arrows
+import Control.Monad.Trans (lift)
+import Control.Monad.Trans.Except (throwE)
+import Control.Monad.Trans.Reader (ask)
 import Data.Char
 import Data.Maybe
-
-import Text.ParserCombinators.ReadP hiding (many, option)
-
+import Options.Applicative
+import Options.Applicative.Arrows
+import Options.Applicative.Types (ReadM(..))
 import Safe (lastMay)
-
+import Text.ParserCombinators.ReadP hiding (many, option)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 runArgParser :: IO [Opt]
@@ -125,7 +126,8 @@ parseFlags = many $
   <|> flag' ShowLoggingCats (long "listlogcats" <> help "Display logging categories")
   <|> flag' ShowLibs        (long "link"        <> help "Display link flags")
   <|> flag' ShowPkgs        (long "listlibs"    <> help "Display installed libraries")
-  <|> flag' ShowLibdir      (long "libdir"      <> help "Display library directory")
+  <|> flag' ShowLibDir      (long "libdir"      <> help "Display library directory")
+  <|> flag' ShowDocDir      (long "docdir"      <> help "Display idrisdoc install directory")
   <|> flag' ShowIncs        (long "include"     <> help "Display the includes flags")
 
   <|> flag' Verbose (short 'V' <> long "verbose" <> help "Loud verbosity")
@@ -137,16 +139,17 @@ parseFlags = many $
   <|> flag' WarnOnly (long "warn")
 
   <|> (Pkg  <$> strOption (short 'p' <> long "package" <> help "Add package as a dependency"))
-  <|> (Port <$> strOption (long "port" <> metavar "PORT" <> help "REPL TCP port"))
+  <|> (Port <$> option portReader (long "port" <> metavar "PORT" <> help "REPL TCP port - pass \"none\" to not bind any port"))
 
   -- Package commands
-  <|> (PkgBuild   <$> strOption (long "build"    <> metavar "IPKG" <> help "Build package"))
-  <|> (PkgInstall <$> strOption (long "install"  <> metavar "IPKG" <> help "Install package"))
-  <|> (PkgREPL    <$> strOption (long "repl"     <> metavar "IPKG" <> help "Launch REPL, only for executables"))
-  <|> (PkgClean   <$> strOption (long "clean"    <> metavar "IPKG" <> help "Clean package"))
-  <|> (PkgMkDoc   <$> strOption (long "mkdoc"    <> metavar "IPKG" <> help "Generate IdrisDoc for package"))
-  <|> (PkgCheck   <$> strOption (long "checkpkg" <> metavar "IPKG" <> help "Check package only"))
-  <|> (PkgTest    <$> strOption (long "testpkg"  <> metavar "IPKG" <> help "Run tests for package"))
+  <|> (PkgBuild      <$> strOption (long "build"      <> metavar "IPKG" <> help "Build package"))
+  <|> (PkgInstall    <$> strOption (long "install"    <> metavar "IPKG" <> help "Install package"))
+  <|> (PkgREPL       <$> strOption (long "repl"       <> metavar "IPKG" <> help "Launch REPL, only for executables"))
+  <|> (PkgClean      <$> strOption (long "clean"      <> metavar "IPKG" <> help "Clean package"))
+  <|> (PkgDocBuild   <$> strOption (long "mkdoc"      <> metavar "IPKG" <> help "Generate IdrisDoc for package"))
+  <|> (PkgDocInstall <$> strOption (long "installdoc" <> metavar "IPKG" <> help "Install IdrisDoc for package"))
+  <|> (PkgCheck      <$> strOption (long "checkpkg"   <> metavar "IPKG" <> help "Check package only"))
+  <|> (PkgTest       <$> strOption (long "testpkg"    <> metavar "IPKG" <> help "Run tests for package"))
 
   -- Misc options
   <|> (BCAsm <$> strOption (long "bytecode"))
@@ -209,6 +212,14 @@ parseFlags = many $
       getExt s = fromMaybe (error ("Unknown extension " ++ s)) (maybeRead s)
       maybeRead :: String -> Maybe LanguageExt
       maybeRead = fmap fst . listToMaybe . reads
+      portReader :: ReadM REPLPort
+      portReader =
+        ((ListenPort . fromIntegral) <$> auto) <|>
+        (ReadM $ do opt <- ask
+                    if map toLower opt == "none"
+                      then return $ DontListen
+                      else lift $ throwE $ ErrorMsg $
+                           "got " <> opt <> " expected port number or \"none\"")
 
 parseVersion :: Parser (a -> a)
 parseVersion = infoOption getIdrisVersion (short 'v' <> long "version" <> help "Print version information")

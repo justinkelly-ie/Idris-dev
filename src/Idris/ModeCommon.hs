@@ -6,35 +6,32 @@ Maintainer  : The Idris Community.
 -}
 module Idris.ModeCommon where
 
-
 import Idris.AbsSyntax
+import Idris.Chaser
+import Idris.Core.TT
+import Idris.Delaborate
 import Idris.Erasure
 import Idris.Error
 import Idris.IBC
-import Idris.Delaborate
-import Idris.Parser hiding (indent)
-import Idris.Chaser
 import Idris.Imports
-import Idris.Output
 import Idris.Info
-import Idris.Core.TT
-
+import Idris.Output
+import Idris.Parser hiding (indent)
 import IRTS.Exports
 
-import Control.Category
-import Prelude hiding ((<$>), (.), id)
+import Prelude hiding (id, (.), (<$>))
 
-import System.Directory
+import Control.Category
+import Control.DeepSeq
 import Control.Monad
 import Control.Monad.Trans.State.Strict (get)
-import Network (PortID(PortNumber))
-import Data.Maybe
 import Data.List hiding (group)
-import Control.DeepSeq
+import Data.Maybe
+import Network.Socket (PortNumber)
+import System.Directory
 
-
-defaultPort :: PortID
-defaultPort = PortNumber (fromIntegral 4294)
+defaultPort :: PortNumber
+defaultPort = fromIntegral 4294
 
 
 loadInputs :: [FilePath] -> Maybe Int -> Idris [FilePath]

@@ -21,23 +21,43 @@
                         score->attempted $= (+1) } st
   ```
 
+* Implicit parameter to interfaces are now allowed. For example:
+
+  ```
+  interface Shows (ts : Vect k Type) where
+  shows : HVect ts -> Vect k String
+  ```
+  In this interface, `k` is an implicit parameter, but previously needed to
+  be explicit
+
+
 ## Library updates
 
 * The File Effect has been updated to take into account changes in
   `Prelude.File` and to provide a 'better' API.
 * `natEnumFromThen` and `natEnumFromTo` have been updated to correctly calculate reverse ranges. Range syntax `[a,b..c]` now can be used again to generate reverse ranges.
 * `divBN` and `modBN` now can only be used for unsigned numbers.
-
 * `return`, which has been an alias for `pure` for many releases, is now deprecated.
+* Replace instance with implementation:
+  + `InstanceN` is deprecated, use `ImplementationN` instead.
+  + `InstanceCtorN` is deprecated, use `ImplementationCtorN` instead.
+  + `addInstance` is deprecated, use `addImplementation` instead.
+  + `%instance` keyword is deprecated, use `%implementation` instead.
+
+* Idris packages are now installed within a sub-directory `libs` of Idris' data directory, before they were installed in the directory's root.
 
 ## Tool updates
 
 * Idris' documentation system now displays the documentation for auto
   implicits in the output of `:doc`. This is tested for in `docs005`.
-
 * New command line flag `--info` that displays information about the installation.
-
 * New command line flag `--sourcepath <dir>` that allows adding directories to the source search path.
+* Allow 'installation' of a package's IdrisDoc documentation into a central location. The default location is the subdirectory `docs` of Idris' data directory.
+  * New flag `--installdoc <ipkg>` provided to install documentation
+  * New flag `--docdir` provided to show default documentation installation location.
+  * New environment variable `IDRIS_DOC_PATH` to allow specification of an alternative installation path for documentation.
+* Semantic meaning behind several environment variables has been clarified in documentation and code. See compilation section of the reference manual for more details.
+
 ## Miscellaneous updates
 
 * The test suite now uses [tasty-golden](https://hackage.haskell.org/package/tasty-golden). New tests must be registered in `test/TestData.hs`, as explained in the relevant `README.md`.
@@ -45,7 +65,7 @@
 
 ## UI Changes
 
-* The :e command can now handle an $EDITOR with arguments in it, like "emacs -nw" 
+* The :e command can now handle an $EDITOR with arguments in it, like "emacs -nw"
 
 
 # New in 0.12:

@@ -12,44 +12,42 @@ module Idris.IBC (loadIBC, loadPkgIndex,
                   writeIBC, writePkgIndex,
                   hasValidIBCVersion, IBCPhase(..)) where
 
-import Idris.Core.Evaluate
-import Idris.Core.TT
+import Idris.AbsSyntax
 import Idris.Core.Binary
 import Idris.Core.CaseTree
-import Idris.AbsSyntax
-import Idris.Imports
-import Idris.Error
+import Idris.Core.Evaluate
+import Idris.Core.TT
 import Idris.DeepSeq
 import Idris.Delaborate
-import qualified Idris.Docstrings as D
 import Idris.Docstrings (Docstring)
+import qualified Idris.Docstrings as D
+import Idris.Error
+import Idris.Imports
 import Idris.Output
 import IRTS.System (getIdrisLibDir)
+
 import Paths_idris
 
 import qualified Cheapskate.Types as CT
-
-import Data.Binary
-import Data.Functor
-import Data.Vector.Binary
-import Data.List as L
-import Data.Maybe (catMaybes)
-import Data.ByteString.Lazy as B hiding (length, elem, map)
-import qualified Data.Text as T
-import qualified Data.Set as S
-
-import Control.Monad
+import Codec.Archive.Zip
 import Control.DeepSeq
+import Control.Monad
 import Control.Monad.State.Strict hiding (get, put)
 import qualified Control.Monad.State.Strict as ST
-import System.FilePath
-import System.Directory
-import Codec.Archive.Zip
-
+import Data.Binary
+import Data.ByteString.Lazy as B hiding (elem, length, map)
+import Data.Functor
+import Data.List as L
+import Data.Maybe (catMaybes)
+import qualified Data.Set as S
+import qualified Data.Text as T
+import Data.Vector.Binary
 import Debug.Trace
+import System.Directory
+import System.FilePath
 
 ibcVersion :: Word16
-ibcVersion = 148
+ibcVersion = 150
 
 -- | When IBC is being loaded - we'll load different things (and omit
 -- different structures/definitions) depending on which phase we're in.
@@ -67,9 +65,9 @@ data IBCFile = IBCFile {
   , ibc_implicits              :: ![(Name, [PArg])]
   , ibc_fixes                  :: ![FixDecl]
   , ibc_statics                :: ![(Name, [Bool])]
-  , ibc_classes                :: ![(Name, InterfaceInfo)]
+  , ibc_interfaces             :: ![(Name, InterfaceInfo)]
   , ibc_records                :: ![(Name, RecordInfo)]
-  , ibc_instances              :: ![(Bool, Bool, Name, Name)]
+  , ibc_implementations        :: ![(Bool, Bool, Name, Name)]
   , ibc_dsls                   :: ![(Name, DSL)]
   , ibc_datatypes              :: ![(Name, TypeInfo)]
   , ibc_optimise               :: ![(Name, OptInfo)]
@@ -172,9 +170,9 @@ entries i = catMaybes [Just $ toEntry "ver" 0 (encode $ ver i),
                        makeEntry "ibc_implicits"  (ibc_implicits i),
                        makeEntry "ibc_fixes"  (ibc_fixes i),
                        makeEntry "ibc_statics"  (ibc_statics i),
-                       makeEntry "ibc_classes"  (ibc_classes i),
+                       makeEntry "ibc_interfaces"  (ibc_interfaces i),
                        makeEntry "ibc_records"  (ibc_records i),
-                       makeEntry "ibc_instances"  (ibc_instances i),
+                       makeEntry "ibc_implementations"  (ibc_implementations i),
                        makeEntry "ibc_dsls"  (ibc_dsls i),
                        makeEntry "ibc_datatypes"  (ibc_datatypes i),
                        makeEntry "ibc_optimise"  (ibc_optimise i),
@@ -270,14 +268,14 @@ ibc i (IBCStatic n) f
                         _ -> ifail "IBC write failed"
 ibc i (IBCInterface n) f
                    = case lookupCtxtExact n (idris_interfaces i) of
-                        Just v -> return f { ibc_classes = (n,v): ibc_classes f     }
+                        Just v -> return f { ibc_interfaces = (n,v): ibc_interfaces f     }
                         _ -> ifail "IBC write failed"
 ibc i (IBCRecord n) f
                    = case lookupCtxtExact n (idris_records i) of
                         Just v -> return f { ibc_records = (n,v): ibc_records f     }
                         _ -> ifail "IBC write failed"
-ibc i (IBCInstance int res n ins) f
-                   = return f { ibc_instances = (int, res, n, ins) : ibc_instances f }
+ibc i (IBCImplementation int res n ins) f
+                   = return f { ibc_implementations = (int, res, n, ins) : ibc_implementations f }
 ibc i (IBCDSL n) f
                    = case lookupCtxtExact n (idris_dsls i) of
                         Just v -> return f { ibc_dsls = (n,v): ibc_dsls f     }
@@ -392,7 +390,7 @@ process reexp phase archive fn = do
                 processStatics archive
                 processInterfaces archive
                 processRecords archive
-                processInstances archive
+                processImplementations archive
                 processDSLs archive
                 processDatatypes  archive
                 processOptimise  archive
@@ -547,15 +545,15 @@ processStatics ar = do
 
 processInterfaces :: Archive -> Idris ()
 processInterfaces ar = do
-    cs <- getEntry [] "ibc_classes" ar
+    cs <- getEntry [] "ibc_interfaces" ar
     mapM_ (\ (n, c) -> do
         i <- getIState
-        -- Don't lose instances from previous IBCs, which
+        -- Don't lose implementations from previous IBCs, which
         -- could have loaded in any order
         let is = case lookupCtxtExact n (idris_interfaces i) of
-                    Just (CI _ _ _ _ _ ins _) -> ins
+                    Just ci -> interface_implementations ci
                     _ -> []
-        let c' = c { interface_instances = interface_instances c ++ is }
+        let c' = c { interface_implementations = interface_implementations c ++ is }
         putIState (i { idris_interfaces = addDef n c' (idris_interfaces i) })) cs
 
 processRecords :: Archive -> Idris ()
@@ -564,10 +562,10 @@ processRecords ar = do
     mapM_ (\ (n, r) ->
         updateIState (\i -> i { idris_records = addDef n r (idris_records i) })) rs
 
-processInstances :: Archive -> Idris ()
-processInstances ar = do
-    cs <- getEntry [] "ibc_instances" ar
-    mapM_ (\ (i, res, n, ins) -> addInstance i res n ins) cs
+processImplementations :: Archive -> Idris ()
+processImplementations ar = do
+    cs <- getEntry [] "ibc_implementations" ar
+    mapM_ (\ (i, res, n, ins) -> addImplementation i res n ins) cs
 
 processDSLs :: Archive -> Idris ()
 processDSLs ar = do
@@ -1224,6 +1222,7 @@ instance Binary FnOpt where
                 AutoHint -> putWord8 15
                 PEGenerated -> putWord8 16
                 StaticFn -> putWord8 17
+                OverlappingDictionary -> putWord8 18
         get
           = do i <- getWord8
                case i of
@@ -1247,6 +1246,7 @@ instance Binary FnOpt where
                    15 -> return AutoHint
                    16 -> return PEGenerated
                    17 -> return StaticFn
+                   18 -> return OverlappingDictionary
                    _ -> error "Corrupted binary data for FnOpt"
 
 instance Binary Fixity where
@@ -1424,7 +1424,7 @@ instance (Binary t) => Binary (PDecl' t) where
                                                put x10
                                                put x11
                                                put x12
-                PInstance x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 ->
+                PImplementation x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 ->
                   do putWord8 8
                      put x1
                      put x2
@@ -1563,7 +1563,7 @@ instance (Binary t) => Binary (PDecl' t) where
                            x13 <- get
                            x14 <- get
                            x15 <- get
-                           return (PInstance x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+                           return (PImplementation x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
                    9 -> do x1 <- get
                            x2 <- get
                            return (PDSL x1 x2)
@@ -2141,7 +2141,7 @@ instance (Binary t) => Binary (PTactic' t) where
                                         put x1
                                         put x2
                                         put x3
-                TCInstance -> putWord8 31
+                TCImplementation -> putWord8 31
                 GoalType x1 x2 -> do putWord8 32
                                      put x1
                                      put x2
@@ -2222,7 +2222,7 @@ instance (Binary t) => Binary (PTactic' t) where
                             x2 <- get
                             x3 <- get
                             return (LetTacTy x1 x2 x3)
-                   31 -> return TCInstance
+                   31 -> return TCImplementation
                    32 -> do x1 <- get
                             x2 <- get
                             return (GoalType x1 x2)
@@ -2354,13 +2354,14 @@ instance (Binary t) => Binary (PArg' t) where
 
 
 instance Binary InterfaceInfo where
-        put (CI x1 x2 x3 x4 x5 _ x6)
+        put (CI x1 x2 x3 x4 x5 x6 _ x7)
           = do put x1
                put x2
                put x3
                put x4
                put x5
                put x6
+               put x7
         get
           = do x1 <- get
                x2 <- get
@@ -2368,7 +2369,8 @@ instance Binary InterfaceInfo where
                x4 <- get
                x5 <- get
                x6 <- get
-               return (CI x1 x2 x3 x4 x5 [] x6)
+               x7 <- get
+               return (CI x1 x2 x3 x4 x5 x6 [] x7)
 
 instance Binary RecordInfo where
         put (RI x1 x2 x3)

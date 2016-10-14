@@ -5,7 +5,7 @@ Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
-{-# LANGUAGE GeneralizedNewtypeDeriving, ConstraintKinds, PatternGuards #-}
+{-# LANGUAGE ConstraintKinds, GeneralizedNewtypeDeriving, PatternGuards #-}
 {-# OPTIONS_GHC -O0 #-}
 module Idris.Parser(module Idris.Parser,
                     module Idris.Parser.Expr,
@@ -13,74 +13,66 @@ module Idris.Parser(module Idris.Parser,
                     module Idris.Parser.Helpers,
                     module Idris.Parser.Ops) where
 
-import Prelude hiding (pi)
-
-import qualified System.Directory as Dir (makeAbsolute)
-
-import Text.Trifecta.Delta
-import Text.Trifecta hiding (span, stringLiteral, charLiteral, natural, symbol, char, string, whiteSpace, Err)
-import Text.Parser.LookAhead
-import Text.Parser.Expression
-import qualified Text.Parser.Token as Tok
-import qualified Text.Parser.Char as Chr
-import qualified Text.Parser.Token.Highlight as Hi
-
-import Text.PrettyPrint.ANSI.Leijen (Doc, plain)
-import qualified Text.PrettyPrint.ANSI.Leijen as ANSI
-
 import Idris.AbsSyntax hiding (namespace, params)
-import Idris.DSL
-import Idris.Imports
-import Idris.Delaborate
-import Idris.Error
-import Idris.Elab.Value
-import Idris.Elab.Term
-import Idris.ElabDecls
+import Idris.Core.Evaluate
+import Idris.Core.TT
 import Idris.Coverage
+import Idris.Delaborate
+import Idris.Docstrings hiding (Unchecked)
+import Idris.DSL
+import Idris.Elab.Term
+import Idris.Elab.Value
+import Idris.ElabDecls
+import Idris.Error
 import Idris.IBC
-import Idris.Unlit
-import Idris.Providers
+import Idris.Imports
 import Idris.Output
-
+import Idris.Parser.Data
+import Idris.Parser.Expr
 import Idris.Parser.Helpers
 import Idris.Parser.Ops
-import Idris.Parser.Expr
-import Idris.Parser.Data
+import Idris.Providers
+import Idris.Unlit
 
-import Idris.Docstrings hiding (Unchecked)
+import Util.DynamicLinker
+import qualified Util.Pretty as P
+import Util.System (readSource, writeSource)
 
 import Paths_idris
 
-import Util.DynamicLinker
-import Util.System (readSource, writeSource)
-import qualified Util.Pretty as P
-
-import Idris.Core.TT
-import Idris.Core.Evaluate
+import Prelude hiding (pi)
 
 import Control.Applicative hiding (Const)
 import Control.Monad
 import Control.Monad.State.Strict
-
-import Data.Function
-import Data.Maybe
-import qualified Data.List.Split as Spl
-import Data.List
-import Data.Monoid
-import Data.Char
-import Data.Ord
-import Data.Foldable (asum)
-import Data.Generics.Uniplate.Data (descendM)
-import qualified Data.Map as M
-import qualified Data.HashSet as HS
-import qualified Data.Text as T
 import qualified Data.ByteString.UTF8 as UTF8
+import Data.Char
+import Data.Foldable (asum)
+import Data.Function
+import Data.Generics.Uniplate.Data (descendM)
+import qualified Data.HashSet as HS
+import Data.List
+import qualified Data.List.Split as Spl
+import qualified Data.Map as M
+import Data.Maybe
+import Data.Monoid
+import Data.Ord
 import qualified Data.Set as S
-
+import qualified Data.Text as T
 import Debug.Trace
-
+import qualified System.Directory as Dir (makeAbsolute)
 import System.FilePath
 import System.IO
+import qualified Text.Parser.Char as Chr
+import Text.Parser.Expression
+import Text.Parser.LookAhead
+import qualified Text.Parser.Token as Tok
+import qualified Text.Parser.Token.Highlight as Hi
+import Text.PrettyPrint.ANSI.Leijen (Doc, plain)
+import qualified Text.PrettyPrint.ANSI.Leijen as ANSI
+import Text.Trifecta hiding (Err, char, charLiteral, natural, span, string,
+                      stringLiteral, symbol, whiteSpace)
+import Text.Trifecta.Delta
 
 {-
 @
@@ -179,8 +171,8 @@ Decl ::=
   | Params
   | Mutual
   | Namespace
-  | Class
-  | Instance
+  | Interface
+  | Implementation
   | DSL
   | Directive
   | Provider
@@ -219,7 +211,7 @@ internalDecl syn
                      <|> fail "End of readable input"
   where declBody :: Bool -> IdrisParser [PDecl]
         declBody b =
-                   try (instance_ True syn)
+                   try (implementation True syn)
                    <|> try (openInterface syn)
                    <|> declBody' b
                    <|> using_ syn
@@ -316,7 +308,7 @@ declExtension syn ns rules =
 
     -- Below is a lot of tedious boilerplate which updates any top level
     -- names in the declaration. It will only change names which are bound in
-    -- the declaration (including method names in classes and field names in
+    -- the declaration (including method names in interfaces and field names in
     -- record declarations, not including pattern variables)
     updateB :: [(Name, SynMatch)] -> Name -> Name
     updateB ns (NS n mods) = NS (updateB ns n) mods
@@ -342,13 +334,13 @@ declExtension syn ns rules =
                    s
     updateNs ns (PInterface docs s fc cs cn fc' ps pdocs pdets ds cname cdocs)
          = PInterface docs s fc cs (updateB ns cn) fc' ps pdocs pdets
-                  (map (updateNs ns) ds)
-                  (updateRecCon ns cname)
-                  cdocs
-    updateNs ns (PInstance docs pdocs s fc cs pnames acc opts cn fc' ps pextra ity ni ds)
-         = PInstance docs pdocs s fc cs pnames acc opts (updateB ns cn) fc'
-                     ps pextra ity (fmap (updateB ns) ni)
-                            (map (updateNs ns) ds)
+                      (map (updateNs ns) ds)
+                      (updateRecCon ns cname)
+                      cdocs
+    updateNs ns (PImplementation docs pdocs s fc cs pnames acc opts cn fc' ps pextra ity ni ds)
+         = PImplementation docs pdocs s fc cs pnames acc opts (updateB ns cn) fc'
+                           ps pextra ity (fmap (updateB ns) ni)
+                           (map (updateNs ns) ds)
     updateNs ns (PMutual fc ds) = PMutual fc (map (updateNs ns) ds)
     updateNs ns (PProvider docs s fc fc' pw n)
         = PProvider docs s fc fc' pw (updateB ns n)
@@ -699,6 +691,8 @@ fnOpt = do reservedHL "total"; return TotalFn
                     return Reflection
         <|> do try (lchar '%' *> reserved "hint");
                     return AutoHint
+        <|> do try (lchar '%' *> reserved "overlapping");
+                    return OverlappingDictionary
         <|> do lchar '%'; reserved "specialise";
                lchar '['; ns <- sepBy nameTimes (lchar ','); lchar ']';
                return $ Specialise ns
@@ -832,32 +826,32 @@ namespace syn =
        return [PNamespace n nfc (concat ds)]
      <?> "namespace declaration"
 
-{-| Parses a methods block (for instances)
+{-| Parses a methods block (for implementations)
 
 @
-  InstanceBlock ::= 'where' OpenBlock FnDecl* CloseBlock
+  ImplementationBlock ::= 'where' OpenBlock FnDecl* CloseBlock
 @
 -}
-instanceBlock :: SyntaxInfo -> IdrisParser [PDecl]
-instanceBlock syn = do reservedHL "where"
-                       openBlock
-                       ds <- many (fnDecl syn)
-                       closeBlock
-                       return (concat ds)
-                    <?> "implementation block"
+implementationBlock :: SyntaxInfo -> IdrisParser [PDecl]
+implementationBlock syn = do reservedHL "where"
+                             openBlock
+                             ds <- many (fnDecl syn)
+                             closeBlock
+                             return (concat ds)
+                          <?> "implementation block"
 
-{-| Parses a methods and instances block (for type classes)
+{-| Parses a methods and implementations block (for interfaces)
 
 @
-MethodOrInstance ::=
+MethodOrImplementation ::=
    FnDecl
-   | Instance
+   | Implementation
    ;
 @
 
 @
-ClassBlock ::=
-  'where' OpenBlock Constructor? MethodOrInstance* CloseBlock
+InterfaceBlock ::=
+  'where' OpenBlock Constructor? MethodOrImplementation* CloseBlock
   ;
 @
 -}
@@ -871,14 +865,13 @@ interfaceBlock syn = do reservedHL "where"
                         ist <- get
                         let cd' = annotate syn ist cd
 
-                        ds <- many (notEndBlock >> try (instance_ True syn)
+                        ds <- many (notEndBlock >> try (implementation True syn)
                                                    <|> do x <- data_ syn
                                                           return [x]
                                                    <|> fnDecl syn)
                         closeBlock
                         return (cn, cd', concat ds)
-                     <?> "class block"
-
+                     <?> "interface block"
   where
     constructor :: IdrisParser (Name, FC)
     constructor = reservedHL "constructor" *> fnName
@@ -886,18 +879,18 @@ interfaceBlock syn = do reservedHL "where"
     annotate :: SyntaxInfo -> IState -> Docstring () -> Docstring (Either Err PTerm)
     annotate syn ist = annotCode $ tryFullExpr syn ist
 
-{-| Parses a type class declaration
+{-| Parses an interface declaration
 
 @
-ClassArgument ::=
+InterfaceArgument ::=
    Name
    | '(' Name ':' Expr ')'
    ;
 @
 
 @
-Class ::=
-  DocComment_t? Accessibility? 'class' ConstraintList? Name ClassArgument* ClassBlock?
+Interface ::=
+  DocComment_t? Accessibility? 'interface' ConstraintList? Name InterfaceArgument* InterfaceBlock?
   ;
 @
 -}
@@ -917,7 +910,7 @@ interface_ syn = do (doc, argDocs, acc)
                     (cn, cd, ds) <- option (Nothing, fst noDocs, []) (interfaceBlock syn)
                     accData acc n (concatMap declared ds)
                     return [PInterface doc syn fc cons' n nfc cs argDocs fds ds cn cd]
-                 <?> "type-class declaration"
+                 <?> "interface declaration"
   where
     fundeps :: IdrisParser [(Name, FC)]
     fundeps = do lchar '|'; sepBy name (lchar ',')
@@ -935,55 +928,55 @@ interface_ syn = do (doc, argDocs, acc)
               fc <- getFC
               return (i, ifc, PType fc)
 
-{-| Parses a type class instance declaration
+{-| Parses an interface implementation declaration
 
 @
-  Instance ::=
-    DocComment_t? 'instance' InstanceName? ConstraintList? Name SimpleExpr* InstanceBlock?
+  Implementation ::=
+    DocComment_t? 'implementation' ImplementationName? ConstraintList? Name SimpleExpr* ImplementationBlock?
     ;
 @
 
 @
-InstanceName ::= '[' Name ']';
+ImplementationName ::= '[' Name ']';
 @
 -}
-instance_ :: Bool -> SyntaxInfo -> IdrisParser [PDecl]
-instance_ kwopt syn
-              = do ist <- get
-                   (doc, argDocs) <- docstring syn
-                   (opts, acc) <- fnOpts
-                   if kwopt then optional instanceKeyword
-                            else do instanceKeyword
-                                    return (Just ())
+implementation :: Bool -> SyntaxInfo -> IdrisParser [PDecl]
+implementation kwopt syn
+                   = do ist <- get
+                        (doc, argDocs) <- docstring syn
+                        (opts, acc) <- fnOpts
+                        if kwopt then optional implementationKeyword
+                                 else do implementationKeyword
+                                         return (Just ())
 
-                   fc <- getFC
-                   en <- optional instanceName
-                   cs <- constraintList syn
-                   let cs' = [(c, ty) | (c, _, ty) <- cs]
-                   (cn, cnfc) <- fnName
-                   args <- many (simpleExpr syn)
-                   let sc = PApp fc (PRef cnfc [cnfc] cn) (map pexp args)
-                   let t = bindList (PPi constraint) cs sc
-                   pnames <- instanceUsing
-                   ds <- instanceBlock syn
-                   return [PInstance doc argDocs syn fc cs' pnames acc opts cn cnfc args [] t en ds]
-                 <?> "implementation declaration"
-  where instanceName :: IdrisParser Name
-        instanceName = do lchar '['; n_in <- fst <$> fnName; lchar ']'
-                          let n = expandNS syn n_in
-                          return n
-                       <?> "implementation name"
-        instanceKeyword :: IdrisParser ()
-        instanceKeyword = reservedHL "implementation"
-                      <|> do reservedHL "instance"
-                             fc <- getFC
-                             parserWarning fc Nothing (Msg "The 'instance' keyword is deprecated. Use 'implementation' (or omit it) instead.")
+                        fc <- getFC
+                        en <- optional implementationName
+                        cs <- constraintList syn
+                        let cs' = [(c, ty) | (c, _, ty) <- cs]
+                        (cn, cnfc) <- fnName
+                        args <- many (simpleExpr syn)
+                        let sc = PApp fc (PRef cnfc [cnfc] cn) (map pexp args)
+                        let t = bindList (PPi constraint) cs sc
+                        pnames <- implementationUsing
+                        ds <- implementationBlock syn
+                        return [PImplementation doc argDocs syn fc cs' pnames acc opts cn cnfc args [] t en ds]
+                      <?> "implementation declaration"
+  where implementationName :: IdrisParser Name
+        implementationName = do lchar '['; n_in <- fst <$> fnName; lchar ']'
+                                let n = expandNS syn n_in
+                                return n
+                             <?> "implementation name"
+        implementationKeyword :: IdrisParser ()
+        implementationKeyword = reservedHL "implementation"
+                         <|> do reservedHL "instance"
+                                fc <- getFC
+                                parserWarning fc Nothing (Msg "The 'instance' keyword is deprecated. Use 'implementation' (or omit it) instead.")
 
-        instanceUsing :: IdrisParser [Name]
-        instanceUsing = do reservedHL "using"
-                           ns <- sepBy1 fnName (lchar ',')
-                           return (map fst ns)
-                        <|> return []
+        implementationUsing :: IdrisParser [Name]
+        implementationUsing = do reservedHL "using"
+                                 ns <- sepBy1 fnName (lchar ',')
+                                 return (map fst ns)
+                              <|> return []
 
 -- | Parse a docstring
 docstring :: SyntaxInfo
@@ -1868,7 +1861,7 @@ loadSource lidr f toline
                    PClauses{} -> r
                    PInterface{} -> r
                    PData{} -> r
-                   PInstance{} -> r
+                   PImplementation{} -> r
                    _ -> x
 
     addModDoc :: SyntaxInfo -> [String] -> Docstring () -> Idris ()

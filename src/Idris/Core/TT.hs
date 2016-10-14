@@ -22,8 +22,8 @@ TT is the core language of Idris. The language has:
    * We have a simple collection of tactics which we use to elaborate source
      programs with implicit syntax into fully explicit terms.
 -}
-{-# LANGUAGE MultiParamTypeClasses, FunctionalDependencies, DeriveFunctor,
-             DeriveDataTypeable, DeriveGeneric, PatternGuards #-}
+{-# LANGUAGE DeriveDataTypeable, DeriveFunctor, DeriveGeneric,
+             FunctionalDependencies, MultiParamTypeClasses, PatternGuards #-}
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 module Idris.Core.TT(
     AppStatus(..), ArithTy(..), Binder(..), Const(..), Ctxt(..)
@@ -38,53 +38,52 @@ module Idris.Core.TT(
   , bindingOf, bindTyArgs, caseName, constDocs, constIsType, deleteDefExact
   , discard, emptyContext, emptyFC, explicitNames, fc_end, fc_fname
   , fc_start, fcIn, fileFC, finalise, fmapMB, forget, forgetEnv
-  , freeNames, getArgTys, getRetTy, implicitable, instantiate, internalNS
+  , freeNames, getArgTys, getRetTy, substRetTy, implicitable, instantiate, internalNS
   , intTyName, isInjective, isTypeConst, lookupCtxt
   , lookupCtxtExact, lookupCtxtName, mapCtxt, mkApp, nativeTyWidth
   , nextName, noOccurrence, nsroot, occurrences
   , pEraseType, pmap, pprintRaw, pprintTT, pprintTTClause, prettyEnv, psubst
   , pToV, pToVs, pureTerm, raw_apply, raw_unapply, refsIn, safeForget
   , safeForgetEnv, showCG, showEnv, showEnvDbg, showSep
-  , sInstanceN, sMN, sNS, spanFC, str, subst, substNames, substTerm
+  , sImplementationN, sMN, sNS, spanFC, str, subst, substNames, substTerm
   , substV, sUN, tcname, termSmallerThan, tfail, thead, tnull
   , toAlist, traceWhen, txt, unApply, uniqueBinders, uniqueName
   , uniqueNameFrom, uniqueNameSet, unList, updateDef, vToP, weakenTm
   ) where
 
--- Work around AMP without CPP
-import Prelude (Eq(..), Show(..), Ord(..), Functor(..), Monad(..), String, Int,
-                Integer, Ordering(..), Maybe(..), Num(..), Bool(..), Enum(..),
-                Read(..), FilePath, Double, (&&), (||), ($), (.), div, error, flip,
-                fst, snd, not, mod, read, otherwise)
+import Util.Pretty hiding (Str)
 
-import Control.Applicative (Applicative (..), Alternative)
-import qualified Control.Applicative as A (Alternative (..))
+-- Work around AMP without CPP
+import Prelude (Bool(..), Double, Enum(..), Eq(..), FilePath, Functor(..), Int,
+                Integer, Maybe(..), Monad(..), Num(..), Ord(..), Ordering(..),
+                Read(..), Show(..), String, div, error, flip, fst, mod, not,
+                otherwise, read, snd, ($), (&&), (.), (||))
+
+import Control.Applicative (Alternative, Applicative(..))
+import qualified Control.Applicative as A (Alternative(..))
 import Control.DeepSeq (($!!))
 import Control.Monad.State.Strict
-import Control.Monad.Trans.Except (Except (..))
-import Debug.Trace
-import qualified Data.Map.Strict as Map
+import Control.Monad.Trans.Except (Except(..))
+import Data.Binary hiding (get, put)
+import qualified Data.Binary as B
 import Data.Char
 import Data.Data (Data)
-import Data.Monoid (mconcat)
-import Numeric (showIntAtBase)
-import qualified Data.Text as T
-import Data.List hiding (group, insert)
-import Data.Set(Set, member, fromList, insert)
-import Data.Maybe (listToMaybe)
 import Data.Foldable (Foldable)
+import Data.List hiding (group, insert)
+import qualified Data.Map.Strict as Map
+import Data.Maybe (listToMaybe)
+import Data.Monoid (mconcat)
+import Data.Set (Set, fromList, insert, member)
+import qualified Data.Text as T
 import Data.Traversable (Traversable)
 import Data.Typeable (Typeable)
 import Data.Vector.Unboxed (Vector)
 import qualified Data.Vector.Unboxed as V
-import qualified Data.Binary as B
-import Data.Binary hiding (get, put)
+import Debug.Trace
 import Foreign.Storable (sizeOf)
 import GHC.Generics (Generic)
-
-import Numeric.IEEE (IEEE (identicalIEEE))
-
-import Util.Pretty hiding (Str)
+import Numeric (showIntAtBase)
+import Numeric.IEEE (IEEE(identicalIEEE))
 
 data Option = TTypeInTType
             | CheckConv
@@ -182,7 +181,6 @@ fileFC s = FileFC s
 
 {-!
 deriving instance Binary FC
-deriving instance NFData FC
 !-}
 
 instance Sized FC where
@@ -246,7 +244,6 @@ data Provenance = ExpectedType
                 | SourceTerm Term
   deriving (Show, Eq, Data, Generic, Typeable)
 {-!
-deriving instance NFData Err
 deriving instance Binary Err
 !-}
 
@@ -343,10 +340,6 @@ instance Applicative TC where
 instance Alternative TC where
     empty = mzero
     (<|>) = mplus
-
-{-!
-deriving instance NFData Err
-!-}
 
 instance Sized ErrorReportPart where
   size (TextPart msg) = 1 + length msg
@@ -499,26 +492,24 @@ caseName _ = False
 
 {-!
 deriving instance Binary Name
-deriving instance NFData Name
 !-}
 
 data SpecialName = WhereN !Int !Name !Name
                  | WithN !Int !Name
-                 | InstanceN !Name [T.Text]
+                 | ImplementationN !Name [T.Text]
                  | ParentN !Name !T.Text
                  | MethodN !Name
                  | CaseN !FC' !Name
                  | ElimN !Name
-                 | InstanceCtorN !Name
+                 | ImplementationCtorN !Name
                  | MetaN !Name !Name
   deriving (Eq, Ord, Data, Generic, Typeable)
 {-!
 deriving instance Binary SpecialName
-deriving instance NFData SpecialName
 !-}
 
-sInstanceN :: Name -> [String] -> SpecialName
-sInstanceN n ss = InstanceN n (map T.pack ss)
+sImplementationN :: Name -> [String] -> SpecialName
+sImplementationN n ss = ImplementationN n (map T.pack ss)
 
 sParentN :: Name -> String -> SpecialName
 sParentN n s = ParentN n (T.pack s)
@@ -552,13 +543,13 @@ instance Show Name where
 instance Show SpecialName where
     show (WhereN i p c) = show p ++ ", " ++ show c
     show (WithN i n) = "with block in " ++ show n
-    show (InstanceN cl inst) = showSep ", " (map T.unpack inst) ++ " implementation of " ++ show cl
+    show (ImplementationN cl impl) = showSep ", " (map T.unpack impl) ++ " implementation of " ++ show cl
     show (MethodN m) = "method " ++ show m
     show (ParentN p c) = show p ++ "#" ++ T.unpack c
     show (CaseN fc n) = "case block in " ++ show n ++
                         if fc == FC' emptyFC then "" else " at " ++ show fc
     show (ElimN n) = "<<" ++ show n ++ " eliminator>>"
-    show (InstanceCtorN n) = "constructor of " ++ show n
+    show (ImplementationCtorN n) = "constructor of " ++ show n
     show (MetaN parent meta) = "<<" ++ show parent ++ " " ++ show meta ++ ">>"
 
 -- Show a name in a way decorated for code generation, not human reading
@@ -570,12 +561,12 @@ showCG (MN i s) = "{" ++ T.unpack s ++ show i ++ "}"
 showCG (SN s) = showCG' s
   where showCG' (WhereN i p c) = showCG p ++ ":" ++ showCG c ++ ":" ++ show i
         showCG' (WithN i n) = "_" ++ showCG n ++ "_with_" ++ show i
-        showCG' (InstanceN cl inst) = '@':showCG cl ++ '$':showSep ":" (map T.unpack inst)
+        showCG' (ImplementationN cl impl) = '@':showCG cl ++ '$':showSep ":" (map T.unpack impl)
         showCG' (MethodN m) = '!':showCG m
         showCG' (ParentN p c) = showCG p ++ "#" ++ show c
         showCG' (CaseN fc c) = showCG c ++ showFC' fc ++ "_case"
         showCG' (ElimN sn) = showCG sn ++ "_elim"
-        showCG' (InstanceCtorN n) = showCG n ++ "_ictor"
+        showCG' (ImplementationCtorN n) = showCG n ++ "_ictor"
         showCG' (MetaN parent meta) = showCG parent ++ "_meta_" ++ showCG meta
         showFC' (FC' NoFC) = ""
         showFC' (FC' (FileFC f)) = "_" ++ cgFN f
@@ -598,10 +589,10 @@ mapCtxt :: (a -> b) -> Ctxt a -> Ctxt b
 mapCtxt = fmap . fmap
 
 -- |Return True if the argument 'Name' should be interpreted as the name of a
--- typeclass.
+-- interface.
 tcname (UN xs) = False
 tcname (NS n _) = tcname n
-tcname (SN (InstanceN _ _)) = True
+tcname (SN (ImplementationN _ _)) = True
 tcname (SN (MethodN _)) = True
 tcname (SN (ParentN _ _)) = True
 tcname _ = False
@@ -695,11 +686,6 @@ intTyName (ITChar) = "Char"
 
 data ArithTy = ATInt IntTy | ATFloat -- TODO: Float vectors https://github.com/idris-lang/Idris-dev/issues/1723
     deriving (Show, Eq, Ord, Data, Generic, Typeable)
-{-!
-deriving instance NFData IntTy
-deriving instance NFData NativeTy
-deriving instance NFData ArithTy
-!-}
 
 instance Pretty ArithTy OutputAnnotation where
     pretty (ATInt ITNative) = text "Int"
@@ -752,7 +738,6 @@ instance Eq Const where
 
 {-!
 deriving instance Binary Const
-deriving instance NFData Const
 !-}
 
 isTypeConst :: Const -> Bool
@@ -850,16 +835,14 @@ instance Pretty Raw OutputAnnotation where
 
 {-!
 deriving instance Binary Raw
-deriving instance NFData Raw
 !-}
 
-data ImplicitInfo = Impl { tcinstance :: Bool, toplevel_imp :: Bool,
+data ImplicitInfo = Impl { tcimplementation :: Bool, toplevel_imp :: Bool,
                            machine_gen :: Bool }
   deriving (Show, Eq, Ord, Data, Generic, Typeable)
 
 {-!
 deriving instance Binary ImplicitInfo
-deriving instance NFData ImplicitInfo
 !-}
 
 -- The type parameter `b` will normally be something like `TT Name` or just
@@ -910,7 +893,6 @@ data Binder b = Lam   { binderTy  :: !b {-^ type annotation for bound variable-}
   deriving (Show, Eq, Ord, Functor, Foldable, Traversable, Data, Generic, Typeable)
 {-!
 deriving instance Binary Binder
-deriving instance NFData Binder
 !-}
 
 instance Sized a => Sized (Binder a) where
@@ -953,15 +935,12 @@ internalNS = "(internal)"
 data UExp = UVar String Int -- ^ universe variable, with source file to disambiguate
           | UVal Int -- ^ explicit universe level
   deriving (Eq, Ord, Data, Generic, Typeable)
-{-!
-deriving instance NFData UExp
-!-}
 
 instance Sized UExp where
   size _ = 1
 
 instance Show UExp where
-    show (UVar ns x) 
+    show (UVar ns x)
        | x < 26 = ns ++ "." ++ [toEnum (x + fromEnum 'a')]
        | otherwise = ns ++ "." ++ toEnum ((x `mod` 26) + fromEnum 'a') : show (x `div` 26)
     show (UVal x) = show x
@@ -995,7 +974,6 @@ data NameType = Bound
   deriving (Show, Ord, Data, Generic, Typeable)
 {-!
 deriving instance Binary NameType
-deriving instance NFData NameType
 !-}
 
 instance Sized NameType where
@@ -1035,7 +1013,6 @@ data TT n = P NameType n (TT n) -- ^ named references with type
   deriving (Ord, Functor, Data, Generic, Typeable)
 {-!
 deriving instance Binary TT
-deriving instance NFData TT
 !-}
 
 class TermSize a where
@@ -1109,7 +1086,6 @@ data TypeInfo = TI { con_names :: [Name],
     deriving (Show, Generic)
 {-!
 deriving instance Binary TypeInfo
-deriving instance NFData TypeInfo
 !-}
 
 instance Eq n => Eq (TT n) where
@@ -1312,7 +1288,7 @@ substTerm old new = st where
   st (Bind x b sc) = Bind x (fmap st b) (st sc)
   st t = t
 
-  eqAlpha as (P _ x _) (P _ y _) 
+  eqAlpha as (P _ x _) (P _ y _)
        = x == y || (x, y) `elem` as || (y, x) `elem` as
   eqAlpha as (V x) (V y) = x == y
   eqAlpha as (Bind x xb xs) (Bind y yb ys)
@@ -1324,7 +1300,7 @@ substTerm old new = st where
        = eqAlpha as xt yt && eqAlpha as xv yv
   eqAlphaB as (Guess xt xv) (Guess yt yv)
        = eqAlpha as xt yt && eqAlpha as xv yv
-  eqAlphaB as bx by = eqAlpha as (binderTy bx) (binderTy by) 
+  eqAlphaB as bx by = eqAlpha as (binderTy bx) (binderTy by)
 
 -- | Return number of occurrences of V 0 or bound name i the term
 occurrences :: Eq n => n -> TT n -> Int
@@ -1473,6 +1449,14 @@ getRetTy (Bind n (PVTy _) sc) = getRetTy sc
 getRetTy (Bind n (Pi _ _ _) sc)   = getRetTy sc
 getRetTy sc = sc
 
+-- | As getRetTy but substitutes names for de Bruijn indices
+substRetTy :: TT n -> TT n
+substRetTy (Bind n (PVar ty) sc) = substRetTy (substV (P Ref n ty) sc)
+substRetTy (Bind n (PVTy ty) sc) = substRetTy (substV (P Ref n ty) sc)
+substRetTy (Bind n (Pi _ ty _) sc) = substRetTy (substV (P Ref n ty) sc)
+substRetTy sc = sc
+   
+
 uniqueNameFrom :: [Name] -> [Name] -> Name
 uniqueNameFrom []           hs = uniqueName (nextName (sUN "x")) hs
 uniqueNameFrom (s : supply) hs
@@ -1511,12 +1495,12 @@ nextName (SN x) = SN (nextName' x)
   where
     nextName' (WhereN i f x) = WhereN i f (nextName x)
     nextName' (WithN i n) = WithN i (nextName n)
-    nextName' (InstanceN n ns) = InstanceN (nextName n) ns
+    nextName' (ImplementationN n ns) = ImplementationN (nextName n) ns
     nextName' (ParentN n ns) = ParentN (nextName n) ns
     nextName' (CaseN fc n) = CaseN fc (nextName n)
     nextName' (ElimN n) = ElimN (nextName n)
     nextName' (MethodN n) = MethodN (nextName n)
-    nextName' (InstanceCtorN n) = InstanceCtorN (nextName n)
+    nextName' (ImplementationCtorN n) = ImplementationCtorN (nextName n)
     nextName' (MetaN parent meta) = MetaN parent (nextName meta)
 nextName (SymRef i) = error "Can't generate a name from a symbol reference"
 
@@ -1668,14 +1652,14 @@ showEnv' env t dbg = se 10 env t where
 -- | Check whether a term has any hole bindings in it - impure if so
 pureTerm :: TT Name -> Bool
 pureTerm (App _ f a) = pureTerm f && pureTerm a
-pureTerm (Bind n b sc) = notClassName n && pureBinder b && pureTerm sc where
+pureTerm (Bind n b sc) = notInterfaceName n && pureBinder b && pureTerm sc where
     pureBinder (Hole _) = False
     pureBinder (Guess _ _) = False
     pureBinder (Let t v) = pureTerm t && pureTerm v
     pureBinder t = pureTerm (binderTy t)
 
-    notClassName (MN _ c) | c == txt "__class" = False
-    notClassName _ = True
+    notInterfaceName (MN _ c) | c == txt "__interface" = False
+    notInterfaceName _ = True
 
 pureTerm _ = True
 

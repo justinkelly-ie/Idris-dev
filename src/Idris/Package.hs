@@ -8,41 +8,37 @@ Maintainer  : The Idris Community.
 {-# LANGUAGE CPP #-}
 module Idris.Package where
 
-import System.Process
-import System.Directory
-import System.Exit
-import System.IO
-import System.FilePath ((</>), addTrailingPathSeparator, takeFileName,
-                        takeDirectory, normalise, addExtension, hasExtension)
-import System.Directory (createDirectoryIfMissing, copyFile)
+import Idris.AbsSyntax
+import Idris.Core.TT
+import Idris.Error (ifail)
+import Idris.IBC
+import Idris.IdrisDoc
+import Idris.Imports
+import Idris.Main (idris, idrisMain)
+import Idris.Output (pshow)
+import Idris.Output
+import Idris.Package.Common
+import Idris.Package.Parser
+import Idris.Parser (loadModule)
+import Idris.REPL
+import IRTS.System
 
 import Util.System
 
 import Control.Monad
-import Control.Monad.Trans.State.Strict (execStateT)
 import Control.Monad.Trans.Except (runExceptT)
-
+import Control.Monad.Trans.State.Strict (execStateT)
+import Data.Either (partitionEithers)
 import Data.List
-import Data.List.Split(splitOn)
-import Data.Maybe(fromMaybe)
-import Data.Either(partitionEithers)
-
-import Idris.Core.TT
-import Idris.REPL
-import Idris.Parser (loadModule)
-import Idris.Output (pshow)
-import Idris.AbsSyntax
-import Idris.IdrisDoc
-import Idris.IBC
-import Idris.Output
-import Idris.Imports
-import Idris.Error (ifail)
-import Idris.Main (idrisMain, idris)
-
-import Idris.Package.Common
-import Idris.Package.Parser
-
-import IRTS.System
+import Data.List.Split (splitOn)
+import Data.Maybe (fromMaybe)
+import System.Directory
+import System.Directory (copyFile, createDirectoryIfMissing)
+import System.Exit
+import System.FilePath (addExtension, addTrailingPathSeparator, hasExtension,
+                        normalise, takeDirectory, takeFileName, (</>))
+import System.IO
+import System.Process
 
 -- To build a package:
 -- * read the package description
@@ -64,7 +60,10 @@ buildPkg :: [Opt]            -- ^ Command line options
 buildPkg copts warnonly (install, fp) = do
   pkgdesc <- parseDesc fp
   dir <- getCurrentDirectory
-  let idx = PkgIndex (pkgIndex (pkgname pkgdesc))
+  let idx' = pkgIndex $ pkgname pkgdesc
+      idx  = PkgIndex $ case opt getIBCSubDir copts of
+        (ibcsubdir:_) -> ibcsubdir </> idx'
+        []            -> idx'
   oks <- mapM (testLib warnonly (pkgname pkgdesc)) (libdeps pkgdesc)
   when (and oks) $ do
     m_ist <- inPkgDir pkgdesc $ do
@@ -187,10 +186,10 @@ cleanPkg copts fp = do
 --
 -- Issue number #1572 on the issue tracker
 --       https://github.com/idris-lang/Idris-dev/issues/1572
-documentPkg :: [Opt]    -- ^ Command line options.
-            -> FilePath -- ^ Path to ipkg file.
+documentPkg :: [Opt]           -- ^ Command line options.
+            -> (Bool,FilePath) -- ^ (Should we install?, Path to ipkg file).
             -> IO ()
-documentPkg copts fp = do
+documentPkg copts (install,fp) = do
   pkgdesc        <- parseDesc fp
   cd             <- getCurrentDirectory
   let pkgDir      = cd </> takeDirectory fp
@@ -213,14 +212,20 @@ documentPkg copts fp = do
             idrisMain opts
             addImportDir (sourcedir pkgdesc)
             load fs
-      idrisInstance  <- run loader idrisInit
+      idrisImplementation  <- run loader idrisInit
       setCurrentDirectory cd
-      case idrisInstance of
+      case idrisImplementation of
         Left  err -> do
           putStrLn $ pshow idrisInit err
           exitWith (ExitFailure 1)
         Right ist -> do
-          docRes <- generateDocs ist mods outputDir
+          iDocDir   <- getIdrisDocDir
+          pkgDocDir <- makeAbsolute (iDocDir </> pkgname pkgdesc)
+          let out_dir = if install then pkgDocDir else outputDir
+          when install $ do
+              putStrLn $ unwords ["Attempting to install IdrisDocs for", pkgname pkgdesc, "in:", out_dir]
+
+          docRes <- generateDocs ist mods out_dir
           case docRes of
             Right _  -> return ()
             Left msg -> do
@@ -276,7 +281,7 @@ installPkg :: [String]  -- ^ Alternate install location
            -> PkgDesc   -- ^ iPKG file.
            -> IO ()
 installPkg altdests pkgdesc = inPkgDir pkgdesc $ do
-  d <- getTargetDir
+  d <- getIdrisLibDir
   let destdir = case altdests of
                   []     -> d
                   (d':_) -> d'
@@ -299,11 +304,11 @@ buildMods opts ns = do let f = map (toPath . showCG) ns
 
 testLib :: Bool -> String -> String -> IO Bool
 testLib warn p f
-    = do d <- getDataDir
+    = do d <- getIdrisCRTSDir
          gcc <- getCC
          (tmpf, tmph) <- tempfile ""
          hClose tmph
-         let libtest = d </> "rts" </> "libtest.c"
+         let libtest = d </> "libtest.c"
          e <- rawSystem gcc [libtest, "-l" ++ f, "-o", tmpf]
          case e of
             ExitSuccess -> return True
@@ -413,14 +418,15 @@ mergeOptions copts popts =
     normaliseOpts = filter filtOpt
 
     filtOpt :: Opt -> Bool
-    filtOpt (PkgBuild   _) = False
-    filtOpt (PkgInstall _) = False
-    filtOpt (PkgClean   _) = False
-    filtOpt (PkgCheck   _) = False
-    filtOpt (PkgREPL    _) = False
-    filtOpt (PkgMkDoc   _) = False
-    filtOpt (PkgTest    _) = False
-    filtOpt _              = True
+    filtOpt (PkgBuild        _) = False
+    filtOpt (PkgInstall      _) = False
+    filtOpt (PkgClean        _) = False
+    filtOpt (PkgCheck        _) = False
+    filtOpt (PkgREPL         _) = False
+    filtOpt (PkgDocBuild     _) = False
+    filtOpt (PkgDocInstall   _) = False
+    filtOpt (PkgTest         _) = False
+    filtOpt _                   = True
 
     chkOpt :: Opt -> Either String Opt
     chkOpt o@(OLogging _)     = Right o

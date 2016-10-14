@@ -13,38 +13,41 @@ module Idris.TypeSearch (
   , defaultScoreFunction
   ) where
 
-import Control.Applicative (Applicative (..), (<$>), (<*>), (<|>))
-import Control.Arrow       (first, second, (&&&), (***))
-import Control.Monad       (when, guard)
-
-import           Data.List   (find, partition, (\\))
-import           Data.Map    (Map)
-import qualified Data.Map    as M
-import           Data.Maybe  (catMaybes, fromMaybe, isJust, maybeToList, mapMaybe)
-import           Data.Monoid (Monoid (mempty, mappend))
-import           Data.Ord    (comparing)
-import qualified Data.PriorityQueue.FingerTree as Q
-import           Data.Set                           (Set)
-import qualified Data.Set                      as S
-import qualified Data.Text                     as T (pack, isPrefixOf)
-import           Data.Traversable                   (traverse)
-
-import Idris.AbsSyntax     (addUsingConstraints, addImpl, getIState, putIState, implicit, logLvl)
-import Idris.AbsSyntaxTree (interface_instances, InterfaceInfo, defaultSyntax, eqTy, Idris
-                           , IState (idris_interfaces, idris_docstrings, tt_ctxt, idris_outputmode),
-                           implicitAllowed, OutputMode(..), PTerm, toplevel)
-import Idris.Core.Evaluate (Context (definitions), Def (Function, TyDecl, CaseOp), normaliseC)
-import Idris.Core.TT       hiding (score)
-import Idris.Core.Unify    (match_unify)
-import Idris.Delaborate    (delabTy)
-import Idris.Docstrings    (noDocs, overview)
-import Idris.Elab.Type     (elabType)
-import Idris.Output        (iputStrLn, iRenderOutput, iPrintResult, iRenderError, iRenderResult, prettyDocumentedIst)
+import Idris.AbsSyntax (addImpl, addUsingConstraints, getIState, implicit,
+                        logLvl, putIState)
+import Idris.AbsSyntaxTree (IState(idris_docstrings, idris_interfaces, idris_outputmode, tt_ctxt),
+                            Idris, InterfaceInfo, OutputMode(..), PTerm,
+                            defaultSyntax, eqTy, implicitAllowed,
+                            interface_implementations, toplevel)
+import Idris.Core.Evaluate (Context(definitions), Def(CaseOp, Function, TyDecl),
+                            normaliseC)
+import Idris.Core.TT hiding (score)
+import Idris.Core.Unify (match_unify)
+import Idris.Delaborate (delabTy)
+import Idris.Docstrings (noDocs, overview)
+import Idris.Elab.Type (elabType)
 import Idris.IBC
+import Idris.Output (iPrintResult, iRenderError, iRenderOutput, iRenderResult,
+                     iputStrLn, prettyDocumentedIst)
+
+import Util.Pretty (Doc, annotate, char, text, vsep, (<>))
 
 import Prelude hiding (pred)
 
-import Util.Pretty (text, char, vsep, (<>), Doc, annotate)
+import Control.Applicative (Applicative(..), (<$>), (<*>), (<|>))
+import Control.Arrow (first, second, (&&&), (***))
+import Control.Monad (guard, when)
+import Data.List (find, partition, (\\))
+import Data.Map (Map)
+import qualified Data.Map as M
+import Data.Maybe (catMaybes, fromMaybe, isJust, mapMaybe, maybeToList)
+import Data.Monoid (Monoid(mappend, mempty))
+import Data.Ord (comparing)
+import qualified Data.PriorityQueue.FingerTree as Q
+import Data.Set (Set)
+import qualified Data.Set as S
+import qualified Data.Text as T (isPrefixOf, pack)
+import Data.Traversable (traverse)
 
 searchByType :: [String] -> PTerm -> Idris ()
 searchByType pkgs pterm = do
@@ -252,16 +255,16 @@ instance Monoid Score where
 -- The 'Int' represents the position of the argument (1st argument, 2nd, etc.)
 type ArgsDAG = [((Name, Type), (Int, Set Name))]
 
--- | A list of typeclass constraints
+-- | A list of interface constraints
 type Interfaces = [(Name, Type)]
 
 -- | The state corresponding to an attempted match of two types.
 data State = State
-  { holes          :: ![(Name, Type)] -- ^ names which have yet to be resolved
+  { holes             :: ![(Name, Type)] -- ^ names which have yet to be resolved
   , argsAndInterfaces :: !(Sided (ArgsDAG, Interfaces))
-     -- ^ arguments and typeclass constraints for each type which have yet to be resolved
-  , score     :: !Score -- ^ the score so far
-  , usedNames :: ![Name] -- ^ all names that have been used
+     -- ^ arguments and interface constraints for each type which have yet to be resolved
+  , score             :: !Score -- ^ the score so far
+  , usedNames         :: ![Name] -- ^ all names that have been used
   } deriving Show
 
 modifyTypes :: (Type -> Type) -> (ArgsDAG, Interfaces) -> (ArgsDAG, Interfaces)
@@ -443,11 +446,11 @@ matchTypesBulk istate maxScore type1 types = getAllResults startQueueOfQueues wh
     guard $ scoreCriterion (score state')
     unifyQueue state' (queue ++ queueAdditions)
 
-  possInterfaceInstances :: [Name] -> Type -> [Type]
-  possInterfaceInstances usedns ty = do
+  possInterfaceImplementations :: [Name] -> Type -> [Type]
+  possInterfaceImplementations usedns ty = do
     interfaceName <- getInterfaceName clss
     interfaceDef <- lookupCtxt interfaceName interfaceInfo
-    n <- interface_instances interfaceDef
+    n <- interface_implementations interfaceDef
     def <- lookupCtxt (fst n) (definitions ctxt)
     nty <- normaliseC ctxt [] <$> (case typeFromDef def of Just x -> [x]; Nothing -> [])
     let ty' = vToP (uniqueBinders usedns nty)
@@ -477,11 +480,11 @@ matchTypesBulk istate maxScore type1 types = getAllResults startQueueOfQueues wh
   -- the search tree. Once we advance in a phase, there should be no going back.
   nextSteps :: State -> [State]
 
-  -- Stage 3 - match typeclasses
+  -- Stage 3 - match interfaces
   nextSteps (State [] unresolved@(Sided ([], c1) ([], c2)) scoreAcc usedns) =
     if null results3 then results4 else results3
     where
-    -- try to match a typeclass argument from the left with a typeclass argument from the right
+    -- try to match an interface argument from the left with an interface argument from the right
     results3 =
          catMaybes [ unifyQueue (State []
          (Sided ([], deleteFromArgList n1 c1)
@@ -489,7 +492,7 @@ matchTypesBulk istate maxScore type1 types = getAllResults startQueueOfQueues wh
          scoreAcc usedns) [(ty1, ty2)]
      | (n1, ty1) <- c1, (n2, ty2) <- c2, let subst2for1 = psubst n2 (P Bound n1 ty1)]
 
-    -- try to hunt match a typeclass constraint by replacing it with an instance
+    -- try to hunt match an interface constraint by replacing it with an implementation
     results4 = [ State [] (both (\(cs, _, _) -> ([], cs)) sds)
                (scoreAcc `mappend` Score 0 0 (both (\(_, amods, _) -> amods) sds))
                (usedns ++ sided (++) (both (\(_, _, hs) -> hs) sds))
@@ -497,17 +500,17 @@ matchTypesBulk istate maxScore type1 types = getAllResults startQueueOfQueues wh
       where
       allMods = parallel defMod mods
       mods :: Sided [( Interfaces, AsymMods, [Name] )]
-      mods = both (instanceMods . snd) unresolved
+      mods = both (implementationMods . snd) unresolved
       defMod :: Sided (Interfaces, AsymMods, [Name])
       defMod = both (\(_, cs) -> (cs, mempty , [])) unresolved
       parallel :: Sided a -> Sided [a] -> [Sided a]
       parallel (Sided l r) (Sided ls rs) = map (flip Sided r) ls ++ map (Sided l) rs
-      instanceMods :: Interfaces -> [( Interfaces , AsymMods, [Name] )]
-      instanceMods interfaces = [ ( newInterfaceArgs, mempty { interfaceApp = 1 }, newHoles )
-                      | (_, ty) <- interfaces
-                      , inst <- possInterfaceInstances usedns ty
-                      , newInterfaceArgs <- maybeToList $ interfaceUnify interfaceInfo ctxt ty inst
-                      , let newHoles = map fst newInterfaceArgs ]
+      implementationMods :: Interfaces -> [( Interfaces , AsymMods, [Name] )]
+      implementationMods interfaces = [ ( newInterfaceArgs, mempty { interfaceApp = 1 }, newHoles )
+                                      | (_, ty) <- interfaces
+                                      , impl <- possInterfaceImplementations usedns ty
+                                      , newInterfaceArgs <- maybeToList $ interfaceUnify interfaceInfo ctxt ty impl
+                                      , let newHoles = map fst newInterfaceArgs ]
 
 
   -- Stage 1 - match arguments
@@ -530,8 +533,8 @@ matchTypesBulk istate maxScore type1 types = getAllResults startQueueOfQueues wh
 
 
 
-  -- Stage 2 - simply introduce a subset of the typeclasses
-  -- we've finished, so take some classes
+  -- Stage 2 - simply introduce a subset of the interfaces
+  -- we've finished, so take some interfaces
   takeSomeInterfaces (State [] unresolved@(Sided ([], _) ([], _)) scoreAcc usedns) =
     map statesFromMods . prod $ both (interfaceMods . snd) unresolved
     where

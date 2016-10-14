@@ -10,28 +10,28 @@ because this gives us a language to build derived tactics out of the
 primitives.
 -}
 
-{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, PatternGuards #-}
+{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, PatternGuards #-}
 module Idris.Core.Elaborate (
     module Idris.Core.Elaborate
   , module Idris.Core.ProofState
   ) where
 
-import Idris.Core.ProofState
-import Idris.Core.ProofTerm(bound_in, getProofTerm, mkProofTerm, bound_in_term,
-                            refocus)
-import Idris.Core.TT
+import Idris.Core.DeepSeq
 import Idris.Core.Evaluate
+import Idris.Core.ProofState
+import Idris.Core.ProofTerm (bound_in, bound_in_term, getProofTerm, mkProofTerm,
+                             refocus)
+import Idris.Core.TT
 import Idris.Core.Typecheck
 import Idris.Core.Unify
-import Idris.Core.DeepSeq
+
+import Util.Pretty hiding (fill)
 
 import Control.DeepSeq
 import Control.Monad.State.Strict
 import Data.Char
 import Data.List
 import Debug.Trace
-
-import Util.Pretty hiding (fill)
 
 data ElabState aux = ES (ProofState, aux) String (Maybe (ElabState aux))
   deriving Show
@@ -329,10 +329,10 @@ checkInjective (tm, l, r) = do ctxt <- get_context
         isInj ctxt (Bind _ (Pi _ _ _) sc) = True
         isInj ctxt _ = False
 
--- | get instance argument names
-get_instances :: Elab' aux [Name]
-get_instances = do ES p _ _ <- get
-                   return $! (instances (fst p))
+-- | get implementation argument names
+get_implementations :: Elab' aux [Name]
+get_implementations = do ES p _ _ <- get
+                         return $! (implementations (fst p))
 
 -- | get auto argument names
 get_autos :: Elab' aux [(Name, ([FailContext], [Name]))]
@@ -539,8 +539,8 @@ defer ds n = do n' <- unique_hole n
 deferType :: Name -> Raw -> [Name] -> Elab' aux ()
 deferType n ty ns = processTactic' (DeferType n ty ns)
 
-instanceArg :: Name -> Elab' aux ()
-instanceArg n = processTactic' (Instance n)
+implementationArg :: Name -> Elab' aux ()
+implementationArg n = processTactic' (Implementation n)
 
 autoArg :: Name -> Elab' aux ()
 autoArg n = processTactic' (AutoArg n)
@@ -572,11 +572,12 @@ prepare_apply fn imps =
        env <- get_env
        -- let claims = getArgs ty imps
        -- claims <- mkClaims (normalise ctxt env ty) imps []
+       -- Count arguments to check if we need to normalise the type
+       let usety = if argsOK (finalise ty) imps
+                      then finalise ty
+                      else normalise ctxt env (finalise ty)
        claims <- -- trace (show (fn, imps, ty, map fst env, normalise ctxt env (finalise ty))) $
-                 mkClaims (finalise ty)
-                          (normalise ctxt env (finalise ty))
-                          False
-                          imps [] (map fst env)
+                 mkClaims usety imps [] (map fst env)
        ES (p, a) s prev <- get
        -- reverse the claims we made so that args go left to right
        let n = length (filter not imps)
@@ -584,14 +585,17 @@ prepare_apply fn imps =
        put (ES (p { holes = h : (reverse (take n hs) ++ drop n hs) }, a) s prev)
        return $! claims
   where
+    argsOK :: Type -> [a] -> Bool
+    argsOK (Bind n (Pi _ _ _) sc) (i : is) = argsOK sc is
+    argsOK _ (i : is) = False
+    argsOK _ [] = True
+
     mkClaims :: Type   -- ^ The type of the operation being applied
-             -> Type   -- ^ Normalised version if we need it
-             -> Bool   -- ^ Using normalised verison
              -> [Bool] -- ^ Whether the arguments are implicit
              -> [(Name, Name)] -- ^ Accumulator for produced claims
              -> [Name] -- ^ Hypotheses
              -> Elab' aux [(Name, Name)] -- ^ The names of the arguments and their holes, resp.
-    mkClaims (Bind n' (Pi _ t_in _) sc) (Bind _ _ scn) norm (i : is) claims hs =
+    mkClaims (Bind n' (Pi _ t_in _) sc) (i : is) claims hs =
         do let t = rebind hs t_in
            n <- getNameFrom (mkMN n')
 --            when (null claims) (start_unify n)
@@ -599,12 +603,9 @@ prepare_apply fn imps =
            env <- get_env
            claim n (forgetEnv (map fst env) t)
            when i (movelast n)
-           mkClaims sc' scn norm is ((n', n) : claims) hs
-    -- if we run out of arguments, we need the normalised version...
-    mkClaims t tn@(Bind _ _ sc) False (i : is) cs hs 
-          = mkClaims tn tn True (i : is) cs hs
-    mkClaims t _ _ [] claims _ = return $! (reverse claims)
-    mkClaims _ _ _ _ _ _
+           mkClaims sc' is ((n', n) : claims) hs
+    mkClaims t [] claims _ = return $! (reverse claims)
+    mkClaims _ _ _ _
             | Var n <- fn
                    = do ctxt <- get_context
                         case lookupTy n ctxt of
@@ -894,7 +895,7 @@ try' t1 t2 proofSearch
   = do s <- get
        ps <- get_probs
        ulog <- getUnifyLog
-       ivs <- get_instances
+       ivs <- get_implementations
        case prunStateT 999999 False ps Nothing t1 s of
             OK ((v, _, _), s') -> do put s'
                                      return $! v
@@ -960,7 +961,7 @@ tryAll' constrok xs = doAll [] 999999 xs
     doAll cs pmax    ((x, msg):xs)
        = do s <- get
             ps <- get_probs
-            ivs <- get_instances
+            ivs <- get_implementations
             case prunStateT pmax True ps (if constrok then Nothing
                                                       else Just ivs) x s of
                 OK ((v, newps, probs), s') ->
@@ -985,7 +986,7 @@ prunStateT pmax zok ps ivs x s
       = case runStateT x s of
              OK (v, s'@(ES (p, _) _ _)) ->
                  let newps = length (problems p) - length ps
-                     ibad = badInstances (instances p) ivs
+                     ibad = badImplementations (implementations p) ivs
                      newpmax = if newps < 0 then 0 else newps in
                  if (newpmax > pmax || (not zok && newps > 0)) -- length ps == 0 && newpmax > 0))
                     then case reverse (problems p) of
@@ -995,8 +996,8 @@ prunStateT pmax zok ps ivs x s
                             else OK ((v, newpmax, problems p), s')
              Error e -> Error e
   where
-    badInstances _ Nothing = False
-    badInstances inow (Just ithen) = length inow > length ithen
+    badImplementations _ Nothing = False
+    badImplementations inow (Just ithen) = length inow > length ithen
 
 debugElaborator :: [ErrorReportPart] -> Elab' aux a
 debugElaborator msg = do ps <- fmap proof get

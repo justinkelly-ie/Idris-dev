@@ -10,58 +10,53 @@ module Idris.Elab.Clause where
 
 import Idris.AbsSyntax
 import Idris.ASTUtils
-import Idris.DSL
-import Idris.Error
-import Idris.Delaborate
-import Idris.Imports
-import Idris.Elab.Term
-import Idris.Coverage
-import Idris.DataOpts
-import Idris.Providers
-import Idris.Primitives
-import Idris.Inliner
-import Idris.PartialEval
-import Idris.Transforms
-import Idris.DeepSeq
-import Idris.Output (iputStrLn, pshow, iWarn, iRenderResult, sendHighlighting)
-import IRTS.Lang
-
-import Idris.Elab.AsPat
-import Idris.Elab.Type
-import Idris.Elab.Transform
-import Idris.Elab.Utils
-
-import Idris.Core.TT
+import Idris.Core.CaseTree
 import Idris.Core.Elaborate hiding (Tactic(..))
 import Idris.Core.Evaluate
 import Idris.Core.Execute
+import Idris.Core.TT
 import Idris.Core.Typecheck
-import Idris.Core.CaseTree
-
+import Idris.Coverage
+import Idris.DataOpts
+import Idris.DeepSeq
+import Idris.Delaborate
 import Idris.Docstrings hiding (Unchecked)
+import Idris.DSL
+import Idris.Elab.AsPat
+import Idris.Elab.Term
+import Idris.Elab.Transform
+import Idris.Elab.Type
+import Idris.Elab.Utils
+import Idris.Error
+import Idris.Imports
+import Idris.Inliner
+import Idris.Output (iRenderResult, iWarn, iputStrLn, pshow, sendHighlighting)
+import Idris.PartialEval
+import Idris.Primitives
+import Idris.Providers
+import Idris.Transforms
+import IRTS.Lang
+
 import Util.Pretty hiding ((<$>))
+import Util.Pretty (pretty, text)
 
 import Prelude hiding (id, (.))
-import Control.Category
 
 import Control.Applicative hiding (Const)
+import Control.Category
 import Control.DeepSeq
 import Control.Monad
-import Control.Monad.State.Strict as State
 import qualified Control.Monad.State.Lazy as LState
+import Control.Monad.State.Strict as State
+import Data.Char (isLetter, toLower)
 import Data.List
-import Data.Maybe
-import Data.Word
-
-import Debug.Trace
-
+import Data.List.Split (splitOn)
 import qualified Data.Map as Map
+import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Text as T
-import Data.Char(isLetter, toLower)
-import Data.List.Split (splitOn)
-
-import Util.Pretty(pretty, text)
+import Data.Word
+import Debug.Trace
 import Numeric
 
 -- | Elaborate a collection of left-hand and right-hand pairs - that is, a
@@ -376,8 +371,8 @@ elabPE info fc caller r =
     mkSpecialised specapp_in = do
         ist <- getIState
         ctxt <- getContext
-        let (specTy, specapp) = getSpecTy ist specapp_in
-        let (n, newnm, specdecl) = getSpecClause ist specapp
+        (specTy, specapp) <- getSpecTy ist specapp_in
+        let (n, newnm, specdecl) = getSpecClause ist specapp specTy
         let lhs = pe_app specdecl
         let rhs = pe_def specdecl
         let undef = case lookupDefExact newnm ctxt of
@@ -387,11 +382,12 @@ elabPE info fc caller r =
         idrisCatch
           (if (undef && all (concreteArg ist) (snd specapp)) then do
                 cgns <- getAllNames n
+                cgns_caller <- getAllNames caller
                 -- on the RHS of the new definition, we should reduce
                 -- everything that's not itself static (because we'll
                 -- want to be a PE version of those next)
                 let cgns' = filter (\x -> x /= n &&
-                                          notStatic ist x) cgns
+                                          notStatic ist x) (cgns ++ cgns_caller)
                 -- set small reduction limit on partial/productive things
                 let maxred = case lookupTotal n ctxt of
                                   [Total _] -> 65536
@@ -404,21 +400,22 @@ elabPE info fc caller r =
                 let opts = [Specialise ((if pe_simple specdecl
                                             then map (\x -> (x, Nothing)) cgns'
                                             else []) ++
-                                         (n, Just maxred) : specnames ++ 
+                                         (n, Just maxred) : specnames ++
                                              concat descs)]
                 logElab 3 $ "Specialising application: " ++ show specapp
-                              ++ " in " ++ show caller ++
-                              " with " ++ show opts
+                              ++ "\n in \n" ++ show caller ++
+                              "\n with \n" ++ show opts
+                              ++ "\nCalling: " ++ show cgns
                 logElab 3 $ "New name: " ++ show newnm
                 logElab 3 $ "PE definition type : " ++ (show specTy)
                             ++ "\n" ++ show opts
-                logElab 5 $ "PE definition " ++ show newnm ++ ":\n" ++
+                logElab 2 $ "PE definition " ++ show newnm ++ ":\n" ++
                              showSep "\n"
                                 (map (\ (lhs, rhs) ->
                                   (showTmImpls lhs ++ " = " ++
                                    showTmImpls rhs)) (pe_clauses specdecl))
 
-                logElab 2 $ show n ++ " transformation rule: " ++
+                logElab 5 $ show n ++ " transformation rule: " ++
                            showTmImpls rhs ++ " ==> " ++ showTmImpls lhs
 
                 elabType info defaultSyntax emptyDocstring [] fc opts newnm NoFC specTy
@@ -434,15 +431,17 @@ elabPE info fc caller r =
           -- if it doesn't work, just don't specialise. Could happen for lots
           -- of valid reasons (e.g. local variables in scope which can't be
           -- lifted out).
-          (\e -> do logElab 3 $ "Couldn't specialise: " ++ (pshow ist e)
+          (\e -> do logElab 5 $ "Couldn't specialise: " ++ (pshow ist e)
                     return [])
 
     hiddenToPH (PHidden _) = Placeholder
     hiddenToPH x = x
 
-    specName simpl (ImplicitS, tm)
+    specName simpl (ImplicitS _, tm)
         | (P Ref n _, _) <- unApply tm = Just (n, Just (if simpl then 1 else 0))
     specName simpl (ExplicitS, tm)
+        | (P Ref n _, _) <- unApply tm = Just (n, Just (if simpl then 1 else 0))
+    specName simpl (ConstraintS, tm) 
         | (P Ref n _, _) <- unApply tm = Just (n, Just (if simpl then 1 else 0))
     specName simpl _ = Nothing
 
@@ -454,7 +453,7 @@ elabPE info fc caller r =
                           i <- getIState
                           let statics = filter (staticFn i) ns
                           return (map (\n -> (n, Nothing)) statics)
-        
+
     staticFn :: IState -> Name -> Bool
     staticFn i n =  case lookupCtxt n (idris_flags i) of
                             [opts] -> elem StaticFn opts
@@ -464,7 +463,7 @@ elabPE info fc caller r =
                            Just s -> not (or s)
                            _ -> True
 
-    concreteArg ist (ImplicitS, tm) = concreteTm ist tm
+    concreteArg ist (ImplicitS _, tm) = concreteTm ist tm
     concreteArg ist (ExplicitS, tm) = concreteTm ist tm
     concreteArg ist _ = True
 
@@ -484,18 +483,18 @@ elabPE info fc caller r =
               [ty] -> let (specty_in, args') = specType args (explicitNames ty)
                           specty = normalise (tt_ctxt ist) [] (finalise specty_in)
                           t = mkPE_TyDecl ist args' (explicitNames specty) in
-                          (t, (n, args'))
+                          return (t, (n, args'))
 --                             (normalise (tt_ctxt ist) [] (specType args ty))
-              _ -> error "Can't happen (getSpecTy)"
+              _ -> ifail $ "Ambiguous name " ++ show n ++ " (getSpecTy)"
 
     -- get the clause of a specialised application
-    getSpecClause ist (n, args)
+    getSpecClause ist (n, args) specTy
        = let newnm = sUN ("PE_" ++ show (nsroot n) ++ "_" ++
                                qhash 5381 (showSep "_" (map showArg args))) in
                                -- UN (show n ++ show (map snd args)) in
-             (n, newnm, mkPE_TermDecl ist newnm n args)
+             (n, newnm, mkPE_TermDecl ist newnm n specTy args)
       where showArg (ExplicitS, n) = qshow n
-            showArg (ImplicitS, n) = qshow n
+            showArg (ImplicitS _, n) = qshow n
             showArg _ = ""
 
             qshow (Bind _ _ _) = "fn"
@@ -666,7 +665,7 @@ elabClause info opts (cnum, PClause fc fname lhs_in_as withs rhs_in_as wherebloc
 
         let winfo = (pinfo info newargs defs windex) { elabFC = Just fc }
         let wb = map (mkStatic static_names) $
-                 map (expandInstanceScope ist decorate newargs defs) $
+                 map (expandImplementationScope ist decorate newargs defs) $
                  map (expandParamsD False ist decorate newargs defs) whereblock
 
         -- Split the where block into declarations with a type, and those
@@ -767,14 +766,17 @@ elabClause info opts (cnum, PClause fc fname lhs_in_as withs rhs_in_as wherebloc
             Error e -> ierror (At fc (CantUnify False (clhsty, Nothing) (crhsty, Nothing) e [] 0))
         i <- getIState
         checkInferred fc (delab' i crhs True True) rhs
-        -- if the function is declared '%error_reverse', or its type,
+        -- if the function is declared '%error_reverse',
         -- then we'll try running it in reverse to improve error messages
+        -- Also if the type is '%error_reverse' and the LHS is smaller than
+        -- the RHS
         let (ret_fam, _) = unApply (getRetTy crhsty)
         rev <- case ret_fam of
                     P _ rfamn _ ->
                         case lookupCtxt rfamn (idris_datatypes i) of
                              [TI _ _ dopts _ _] ->
-                                 return (DataErrRev `elem` dopts)
+                                 return (DataErrRev `elem` dopts &&
+                                         size clhs <= size crhs)
                              _ -> return False
                     _ -> return False
 
@@ -1109,8 +1111,8 @@ elabClause info opts (_, PWith fc fname lhs_in withs wval_in pn_in withblock)
          addResolves ty (PApp fc f args) = PApp fc f (addResolvesArgs fc ty args)
          addResolves ty tm = tm
 
-         -- if an argument's type is a type class, and is otherwise to
-         -- be inferred, then resolve it with instance search
+         -- if an argument's type is an interface, and is otherwise to
+         -- be inferred, then resolve it with implementation search
          -- This is something of a hack, because matching on the top level
          -- application won't find this information for us
          addResolvesArgs :: FC -> Term -> [PArg] -> [PArg]

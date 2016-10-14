@@ -5,57 +5,50 @@ Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
-{-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, PatternGuards #-}
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 module Idris.IdrisDoc (generateDocs) where
 
-import Idris.Core.TT (Name (..), sUN, SpecialName (..), OutputAnnotation (..),
-                      TextFormatting (..), txt, str, nsroot, constIsType, toAlist)
-import Idris.Core.Evaluate (ctxtAlist, Def (..), lookupDefAcc,
-                            Accessibility (..), isDConName, isFnName,
-                            isTConName)
-import Idris.Parser.Helpers (opChars)
 import Idris.AbsSyntax
+import Idris.Core.Evaluate (Accessibility(..), Def(..), ctxtAlist, isDConName,
+                            isFnName, isTConName, lookupDefAcc)
+import Idris.Core.TT (Name(..), OutputAnnotation(..), SpecialName(..),
+                      TextFormatting(..), constIsType, nsroot, sUN, str,
+                      toAlist, txt)
 import Idris.Docs
 import Idris.Docstrings (nullDocstring)
 import qualified Idris.Docstrings as Docstrings
-
+import Idris.Parser.Helpers (opChars)
 import IRTS.System (getDataFileName)
 
 import Control.Applicative ((<|>))
 import Control.Monad (forM_)
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.State.Strict
-
-import Data.Maybe
-
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BS2
-import qualified Data.Text.Encoding as E
 import qualified Data.List as L
 import qualified Data.List.Split as LS
 import qualified Data.Map as M hiding ((!))
+import Data.Maybe
 import Data.Monoid (mempty)
 import qualified Data.Ord (compare)
 import qualified Data.Set as S
 import qualified Data.Text as T
-
+import qualified Data.Text.Encoding as E
+import System.Directory
+import System.FilePath
 import System.IO
 import System.IO.Error
-import System.FilePath
-import System.Directory
-
-import Text.PrettyPrint.Annotated.Leijen (displayDecorated, renderCompact)
-
-import Text.Blaze (toValue, contents)
-import Text.Blaze.Internal (MarkupM (Empty))
-import Text.Blaze.Html5 ((!), toHtml, preEscapedToHtml)
+import Text.Blaze (contents, toValue)
+import qualified Text.Blaze.Html.Renderer.String as R
+import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
+import Text.Blaze.Html5 (preEscapedToHtml, toHtml, (!))
 import qualified Text.Blaze.Html5 as H
 import Text.Blaze.Html5.Attributes as A
-import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
-import qualified Text.Blaze.Html.Renderer.String as R
+import Text.Blaze.Internal (MarkupM(Empty))
 import Text.Blaze.Renderer.String (renderMarkup)
+import Text.PrettyPrint.Annotated.Leijen (displayDecorated, renderCompact)
 
 -- ---------------------------------------------------------------- [ Public ]
 
@@ -165,7 +158,7 @@ fetchInfo ist nss =
     filterContents p (NsInfo md ns) = NsInfo md (filter p ns)
     updateContents f x = x { nsContents = f (nsContents x) }
 
--- | Removes loose class methods and data constructors,
+-- | Removes loose interface methods and data constructors,
 --   leaving them documented only under their parent.
 removeOrphans :: [NsItem] -- ^ List to remove orphans from
               -> [NsItem] -- ^ Orphan-free list
@@ -226,7 +219,7 @@ referredNss (n, Just d, _) =
         getFunDocs (DataDoc f fs)                  = f:fs
         getFunDocs (InterfaceDoc _ _ fs _ _ _ _ _) = fs
         getFunDocs (RecordDoc _ _ f fs _)          = f:fs
-        getFunDocs (NamedInstanceDoc _ fd)         = [fd]
+        getFunDocs (NamedImplementationDoc _ fd)         = [fd]
         getFunDocs (ModDoc _ _)                    = []
         types (FD _ _ args t _)                    = t:(map second args)
         second (_, x, _, _)                        = x
@@ -577,7 +570,7 @@ createFunDoc ist fd@(FD name docstring args ftype fixity) = do
 
 
 -- | Generates HTML documentation for any Docs type
---   TODO: Generate actual signatures for typeclasses
+--   TODO: Generate actual signatures for interfaces
 createOtherDoc :: IState -- ^ Needed to determine the types of names
                -> Docs   -- ^ Namespace item to generate HTML block for
                -> H.Html -- ^ Resulting HTML
@@ -643,7 +636,7 @@ createOtherDoc ist (DataDoc fd@(FD n docstring args _ _) fds) = do
           H.dt $ toHtml $ show name
           H.dd $ Docstrings.renderHtml docstring
 
-createOtherDoc ist (NamedInstanceDoc _ fd) = createFunDoc ist fd
+createOtherDoc ist (NamedImplementationDoc _ fd) = createFunDoc ist fd
 
 createOtherDoc ist (ModDoc _  docstring) = do
   Docstrings.renderHtml docstring

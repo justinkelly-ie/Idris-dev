@@ -469,7 +469,7 @@ It is a matter of taste whether you want to do this — sometimes it can
 help document a function by making the purpose of an argument more
 clear.
 
-Furthermore, ``{}`` can be used to pattern match on the left hand side, i.e. 
+Furthermore, ``{}`` can be used to pattern match on the left hand side, i.e.
 ``{var = pat}`` gets an implicit variable and attempts to pattern match on "pat";
 For example :
 
@@ -635,12 +635,12 @@ The syntax ``x <- iovalue`` executes the I/O operation ``iovalue``, of
 type ``IO a``, and puts the result, of type ``a`` into the variable
 ``x``. In this case, ``getLine`` returns an ``IO String``, so ``name``
 has type ``String``. Indentation is significant — each statement in
-the do block must begin in the same column. The ``return`` operation
+the do block must begin in the same column. The ``pure`` operation
 allows us to inject a value directly into an IO operation:
 
 .. code-block:: idris
 
-    return : a -> IO a
+    pure : a -> IO a
 
 As we will see later, ``do`` notation is more general than this, and
 can be overloaded.
@@ -1074,7 +1074,7 @@ The syntax ``record { field = val, ... }`` generates a function which
 updates the given fields in a record. ``=`` assigns a new value to a field,
 and ``$=`` applies a function to update its value.
 
-Each record is defined in its own namespace, which means that field names 
+Each record is defined in its own namespace, which means that field names
 can be reused in multiple records.
 
 Records, and fields within records, can have dependent types. Updates
@@ -1331,6 +1331,7 @@ at runtime if called on an empty list. (This is similar to the behavior of
 Haskell's ``head`` function.) ``unsafeHead`` might look like this:
 
 .. code-block:: idris
+
     -- Unsafe head example!
     unsafeHead : List a -> a
     unsafeHead (x::xs) = x
