@@ -47,7 +47,7 @@ import System.Directory
 import System.FilePath
 
 ibcVersion :: Word16
-ibcVersion = 151
+ibcVersion = 155
 
 -- | When IBC is being loaded - we'll load different things (and omit
 -- different structures/definitions) depending on which phase we're in.
@@ -313,7 +313,10 @@ ibc i (IBCCG n) f = case lookupCtxtExact n (idris_callgraph i) of
                         _ -> ifail "IBC write failed"
 ibc i (IBCCoercion n) f = return f { ibc_coercions = n : ibc_coercions f }
 ibc i (IBCAccess n a) f = return f { ibc_access = (n,a) : ibc_access f }
-ibc i (IBCFlags n a) f = return f { ibc_flags = (n,a) : ibc_flags f }
+ibc i (IBCFlags n) f 
+    = case lookupCtxtExact n (idris_flags i) of
+           Just a -> return f { ibc_flags = (n,a): ibc_flags f }
+           _ -> ifail "IBC write failed"
 ibc i (IBCFnInfo n a) f = return f { ibc_fninfo = (n,a) : ibc_fninfo f }
 ibc i (IBCTotal n a) f = return f { ibc_total = (n,a) : ibc_total f }
 ibc i (IBCInjective n a) f = return f { ibc_injective = (n,a) : ibc_injective f }
@@ -657,10 +660,10 @@ processDefs ar = do
             r' <- update r
             return $ Right (l', r')
 
-        updateCD (CaseDefs (ts, t) (cs, c) (is, i) (rs, r)) = do
+        updateCD (CaseDefs (cs, c) (rs, r)) = do
             c' <- updateSC c
             r' <- updateSC r
-            return $ CaseDefs (cs, c') (cs, c') (cs, c') (rs, r')
+            return $ CaseDefs (cs, c') (rs, r')
 
         updateSC (Case t n alts) = do
             alts' <- mapM updateAlt alts
@@ -940,14 +943,16 @@ instance Binary SizeChange where
                    _ -> error "Corrupted binary data for SizeChange"
 
 instance Binary CGInfo where
-        put (CGInfo x1 x2 x3)
+        put (CGInfo x1 x2 x3 x4)
           = do put x1
 --                put x3 -- Already used SCG info for totality check
-               put x3
+               put x2
+               put x4
         get
           = do x1 <- get
+               x2 <- get
                x3 <- get
-               return (CGInfo x1 [] x3)
+               return (CGInfo x1 x2 [] x3)
 
 instance Binary CaseType where
         put x = case x of
@@ -1036,14 +1041,13 @@ instance Binary CaseAlt where
                    _ -> error "Corrupted binary data for CaseAlt"
 
 instance Binary CaseDefs where
-        put (CaseDefs x1 x2 x3 x4)
-          = do -- don't need totality checked or inlined versions
+        put (CaseDefs x1 x2)
+          = do put x1
                put x2
-               put x4
         get
-          = do x2 <- get
-               x4 <- get
-               return (CaseDefs x2 x2 x2 x4)
+          = do x1 <- get
+               x2 <- get
+               return (CaseDefs x1 x2)
 
 instance Binary CaseInfo where
         put x@(CaseInfo x1 x2 x3) = do put x1
@@ -1208,7 +1212,7 @@ instance Binary FnOpt where
                 AssertTotal -> putWord8 3
                 Specialise x -> do putWord8 4
                                    put x
-                Coinductive -> putWord8 5
+                AllGuarded -> putWord8 5
                 PartialFn -> putWord8 6
                 Implicit -> putWord8 7
                 Reflection -> putWord8 8
@@ -1223,6 +1227,9 @@ instance Binary FnOpt where
                 PEGenerated -> putWord8 16
                 StaticFn -> putWord8 17
                 OverlappingDictionary -> putWord8 18
+                UnfoldIface x ns -> do putWord8 19
+                                       put x
+                                       put ns
         get
           = do i <- getWord8
                case i of
@@ -1232,7 +1239,7 @@ instance Binary FnOpt where
                    3 -> return AssertTotal
                    4 -> do x <- get
                            return (Specialise x)
-                   5 -> return Coinductive
+                   5 -> return AllGuarded
                    6 -> return PartialFn
                    7 -> return Implicit
                    8 -> return Reflection
@@ -1247,6 +1254,9 @@ instance Binary FnOpt where
                    16 -> return PEGenerated
                    17 -> return StaticFn
                    18 -> return OverlappingDictionary
+                   19 -> do x <- get
+                            ns <- get
+                            return (UnfoldIface x ns)
                    _ -> error "Corrupted binary data for FnOpt"
 
 instance Binary Fixity where
@@ -2386,13 +2396,15 @@ instance Binary RecordInfo where
                return (RI x1 x2 x3)
 
 instance Binary OptInfo where
-        put (Optimise x1 x2)
+        put (Optimise x1 x2 x3)
           = do put x1
                put x2
+               put x3
         get
           = do x1 <- get
                x2 <- get
-               return (Optimise x1 x2)
+               x3 <- get
+               return (Optimise x1 x2 x3)
 
 instance Binary FnInfo where
         put (FnInfo x1)

@@ -208,6 +208,13 @@ clear_totcheck  = do i <- getIState; putIState $ i { idris_totcheck = [] }
 setFlags :: Name -> [FnOpt] -> Idris ()
 setFlags n fs = do i <- getIState; putIState $ i { idris_flags = addDef n fs (idris_flags i) }
 
+addFnOpt :: Name -> FnOpt -> Idris ()
+addFnOpt n f = do i <- getIState
+                  let fls = case lookupCtxtExact n (idris_flags i) of
+                                 Nothing -> []
+                                 Just x -> x
+                  setFlags n (f : fls)
+
 setFnInfo :: Name -> FnInfo -> Idris ()
 setFnInfo n fs = do i <- getIState; putIState $ i { idris_fninfo = addDef n fs (idris_fninfo i) }
 
@@ -264,9 +271,9 @@ addCalls :: Name -> [Name] -> Idris ()
 addCalls n calls
    = do i <- getIState
         case lookupCtxtExact n (idris_callgraph i) of
-             Nothing -> addToCG n (CGInfo calls [] [])
-             Just (CGInfo cs scg used) ->
-                addToCG n (CGInfo (nub (calls ++ cs)) scg used)
+             Nothing -> addToCG n (CGInfo calls Nothing [] [])
+             Just (CGInfo cs ans scg used) ->
+                addToCG n (CGInfo (nub (calls ++ cs)) ans scg used)
 
 addTyInferred :: Name -> Idris ()
 addTyInferred n
@@ -358,15 +365,36 @@ getFunctionErrorHandlers f arg = do i <- getIState
 
 -- | Trace all the names in a call graph starting at the given name
 getAllNames :: Name -> Idris [Name]
-getAllNames n = allNames [] n
+getAllNames n = do i <- getIState
+                   case getCGAllNames i n of
+                        Just ns -> return ns
+                        Nothing -> do ns <- allNames [] n
+                                      addCGAllNames i n ns
+                                      return ns
+
+getCGAllNames :: IState -> Name -> Maybe [Name]
+getCGAllNames i n = case lookupCtxtExact n (idris_callgraph i) of
+                         Just ci -> allCalls ci
+                         _ -> Nothing
+
+addCGAllNames :: IState -> Name -> [Name] -> Idris ()
+addCGAllNames i n ns
+      = case lookupCtxtExact n (idris_callgraph i) of
+             Just ci -> addToCG n (ci { allCalls = Just ns })
+             _ -> addToCG n (CGInfo [] (Just ns) [] [])
 
 allNames :: [Name] -> Name -> Idris [Name]
 allNames ns n | n `elem` ns = return []
 allNames ns n = do i <- getIState
-                   case lookupCtxtExact n (idris_callgraph i) of
-                      Just ns' -> do more <- mapM (allNames (n:ns)) (calls ns')
-                                     return (nub (n : concat more))
-                      _ -> return [n]
+                   case getCGAllNames i n of
+                        Just ns -> return ns
+                        Nothing -> case lookupCtxtExact n (idris_callgraph i) of
+                                        Just ci -> 
+                                          do more <- mapM (allNames (n:ns)) (calls ci)
+                                             let ns' = nub (n : concat more)
+                                             addCGAllNames i n ns'
+                                             return ns'
+                                        _ -> return [n]
 
 addCoercion :: Name -> Idris ()
 addCoercion n = do i <- getIState
@@ -662,9 +690,9 @@ clearPTypes = do i <- get
    where pErase (CaseOp c t tys orig tot cds)
             = CaseOp c t tys orig [] (pErase' cds)
          pErase x = x
-         pErase' (CaseDefs _ (cs, c) _ rs)
+         pErase' (CaseDefs (cs, c) rs)
              = let c' = (cs, fmap pEraseType c) in
-                   CaseDefs c' c' c' rs
+                   CaseDefs c' rs
 
 checkUndefined :: FC -> Name -> Idris ()
 checkUndefined fc n

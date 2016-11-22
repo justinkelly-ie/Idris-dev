@@ -40,7 +40,7 @@ Description:    Idris is a general purpose language with full dependent types.
                 .
                 * Hugs style interactive environment
 
-Cabal-Version:  >= 1.8
+Cabal-Version:  >= 1.8.1
 
 Build-type:     Custom
 
@@ -209,6 +209,7 @@ Library
                 , Idris.REPL
                 , Idris.REPL.Parser
                 , Idris.REPL.Commands
+                , Idris.Termination
                 , Idris.Transforms
                 , Idris.TypeSearch
                 , Idris.Unlit
@@ -288,7 +289,7 @@ Library
                 , vector < 0.12
                 , vector-binary-instances < 0.3
                 , zip-archive > 0.2.3.5 && < 0.4
-                , safe
+                , safe == 0.3.9
                 , fsnotify >= 0.2 && < 2.2
                 , async < 2.2
 
@@ -362,7 +363,7 @@ Test-suite regression-and-feature-tests
                , filepath
                , directory
                , haskeline >= 0.7
-               , optparse-applicative >= 0.11 && < 0.13
+               , optparse-applicative >= 0.11 && < 0.14
                , tagged
                , tasty >= 0.8
                , tasty-golden >= 2.0
