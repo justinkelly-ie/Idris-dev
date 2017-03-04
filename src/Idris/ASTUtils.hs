@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-|
 Module      : Idris.ASTUtils
 Description : This implements just a few basic lens-like concepts to ease state updates. Similar to fclabels in approach, just without the extra dependency.
@@ -148,7 +149,7 @@ opts_idrisCmdline =
 --
 -- This has a terrible name, but I'm not sure of a better one that
 -- isn't confusingly close to tt_ctxt
-known_terms :: Field IState (Ctxt (Def, Injectivity, Accessibility, Totality, MetaInformation))
+known_terms :: Field IState (Ctxt (Def, RigCount, Injectivity, Accessibility, Totality, MetaInformation))
 known_terms = Field (definitions . tt_ctxt)
                     (\v state -> state {tt_ctxt = (tt_ctxt state) {definitions = v}})
 

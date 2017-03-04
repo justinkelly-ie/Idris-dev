@@ -47,7 +47,7 @@ import System.Directory
 import System.FilePath
 
 ibcVersion :: Word16
-ibcVersion = 155
+ibcVersion = 160
 
 -- | When IBC is being loaded - we'll load different things (and omit
 -- different structures/definitions) depending on which phase we're in.
@@ -86,6 +86,7 @@ data IBCFile = IBCFile {
   , ibc_moduledocs             :: ![(Name, Docstring D.DocTerm)]
   , ibc_transforms             :: ![(Name, (Term, Term))]
   , ibc_errRev                 :: ![(Term, Term)]
+  , ibc_errReduce              :: ![Name]
   , ibc_coercions              :: ![Name]
   , ibc_lineapps               :: ![(FilePath, Int, PTerm)]
   , ibc_namehints              :: ![(Name, Name)]
@@ -114,7 +115,7 @@ deriving instance Binary IBCFile
 !-}
 
 initIBC :: IBCFile
-initIBC = IBCFile ibcVersion "" [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] Nothing [] [] [] [] [] [] [] [] [] []
+initIBC = IBCFile ibcVersion "" [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] Nothing [] [] [] [] [] [] [] [] [] []
 
 hasValidIBCVersion :: FilePath -> Idris Bool
 hasValidIBCVersion fp = do
@@ -191,6 +192,7 @@ entries i = catMaybes [Just $ toEntry "ver" 0 (encode $ ver i),
                        makeEntry "ibc_moduledocs"  (ibc_moduledocs i),
                        makeEntry "ibc_transforms"  (ibc_transforms i),
                        makeEntry "ibc_errRev"  (ibc_errRev i),
+                       makeEntry "ibc_errReduce"  (ibc_errReduce i),
                        makeEntry "ibc_coercions"  (ibc_coercions i),
                        makeEntry "ibc_lineapps"  (ibc_lineapps i),
                        makeEntry "ibc_namehints"  (ibc_namehints i),
@@ -220,7 +222,9 @@ writeArchive fp i = do let a = L.foldl (\x y -> addEntryToArchive y x) emptyArch
 
 writeIBC :: FilePath -> FilePath -> Idris ()
 writeIBC src f
-    = do logIBC 1 $ "Writing ibc " ++ show f
+    = do
+         logIBC  1 $ "Writing IBC for: " ++ show f
+         iReport 2 $ "Writing IBC for: " ++ show f
          i <- getIState
 --          case (Data.List.map fst (idris_metavars i)) \\ primDefs of
 --                 (_:_) -> ifail "Can't write ibc when there are unsolved metavariables"
@@ -313,7 +317,7 @@ ibc i (IBCCG n) f = case lookupCtxtExact n (idris_callgraph i) of
                         _ -> ifail "IBC write failed"
 ibc i (IBCCoercion n) f = return f { ibc_coercions = n : ibc_coercions f }
 ibc i (IBCAccess n a) f = return f { ibc_access = (n,a) : ibc_access f }
-ibc i (IBCFlags n) f 
+ibc i (IBCFlags n) f
     = case lookupCtxtExact n (idris_flags i) of
            Just a -> return f { ibc_flags = (n,a): ibc_flags f }
            _ -> ifail "IBC write failed"
@@ -322,6 +326,7 @@ ibc i (IBCTotal n a) f = return f { ibc_total = (n,a) : ibc_total f }
 ibc i (IBCInjective n a) f = return f { ibc_injective = (n,a) : ibc_injective f }
 ibc i (IBCTrans n t) f = return f { ibc_transforms = (n, t) : ibc_transforms f }
 ibc i (IBCErrRev t) f = return f { ibc_errRev = t : ibc_errRev f }
+ibc i (IBCErrReduce t) f = return f { ibc_errReduce = t : ibc_errReduce f }
 ibc i (IBCLineApp fp l t) f
      = return f { ibc_lineapps = (fp,l,t) : ibc_lineapps f }
 ibc i (IBCNameHint (n, ty)) f
@@ -414,6 +419,7 @@ process reexp phase archive fn = do
                 processCoercions archive
                 processTransforms archive
                 processErrRev archive
+                processErrReduce archive
                 processLineApps archive
                 processNameHints archive
                 processMetaInformation archive
@@ -794,6 +800,11 @@ processErrRev :: Archive -> Idris ()
 processErrRev ar = do
     ts <- getEntry [] "ibc_errRev" ar
     mapM_ addErrRev ts
+
+processErrReduce :: Archive -> Idris ()
+processErrReduce ar = do
+    ts <- getEntry [] "ibc_errReduce" ar
+    mapM_ addErrReduce ts
 
 processLineApps :: Archive -> Idris ()
 processLineApps ar = do
@@ -1227,9 +1238,7 @@ instance Binary FnOpt where
                 PEGenerated -> putWord8 16
                 StaticFn -> putWord8 17
                 OverlappingDictionary -> putWord8 18
-                UnfoldIface x ns -> do putWord8 19
-                                       put x
-                                       put ns
+                ErrorReduce -> putWord8 20
         get
           = do i <- getWord8
                case i of
@@ -1254,9 +1263,7 @@ instance Binary FnOpt where
                    16 -> return PEGenerated
                    17 -> return StaticFn
                    18 -> return OverlappingDictionary
-                   19 -> do x <- get
-                            ns <- get
-                            return (UnfoldIface x ns)
+                   20 -> return ErrorReduce
                    _ -> error "Corrupted binary data for FnOpt"
 
 instance Binary Fixity where
@@ -1326,26 +1333,30 @@ instance Binary Static where
 instance Binary Plicity where
         put x
           = case x of
-                Imp x1 x2 x3 x4 _ ->
+                Imp x1 x2 x3 x4 _ x5 ->
                              do putWord8 0
                                 put x1
                                 put x2
                                 put x3
                                 put x4
-                Exp x1 x2 x3 ->
+                                put x5
+                Exp x1 x2 x3 x4 ->
                              do putWord8 1
                                 put x1
                                 put x2
                                 put x3
-                Constraint x1 x2 ->
+                                put x4
+                Constraint x1 x2 x3 ->
                                     do putWord8 2
                                        put x1
                                        put x2
-                TacImp x1 x2 x3 ->
+                                       put x3
+                TacImp x1 x2 x3 x4 ->
                                    do putWord8 3
                                       put x1
                                       put x2
                                       put x3
+                                      put x4
         get
           = do i <- getWord8
                case i of
@@ -1353,18 +1364,22 @@ instance Binary Plicity where
                            x2 <- get
                            x3 <- get
                            x4 <- get
-                           return (Imp x1 x2 x3 x4 False)
+                           x5 <- get
+                           return (Imp x1 x2 x3 x4 False x5)
                    1 -> do x1 <- get
                            x2 <- get
                            x3 <- get
-                           return (Exp x1 x2 x3)
+                           x4 <- get
+                           return (Exp x1 x2 x3 x4)
                    2 -> do x1 <- get
                            x2 <- get
-                           return (Constraint x1 x2)
+                           x3 <- get
+                           return (Constraint x1 x2 x3)
                    3 -> do x1 <- get
                            x2 <- get
                            x3 <- get
-                           return (TacImp x1 x2 x3)
+                           x4 <- get
+                           return (TacImp x1 x2 x3 x4)
                    _ -> error "Corrupted binary data for Plicity"
 
 
@@ -2414,17 +2429,19 @@ instance Binary FnInfo where
                return (FnInfo x1)
 
 instance Binary TypeInfo where
-        put (TI x1 x2 x3 x4 x5) = do put x1
-                                     put x2
-                                     put x3
-                                     put x4
-                                     put x5
+        put (TI x1 x2 x3 x4 x5 x6) = do put x1
+                                        put x2
+                                        put x3
+                                        put x4
+                                        put x5
+                                        put x6
         get = do x1 <- get
                  x2 <- get
                  x3 <- get
                  x4 <- get
                  x5 <- get
-                 return (TI x1 x2 x3 x4 x5)
+                 x6 <- get
+                 return (TI x1 x2 x3 x4 x5 x6)
 
 instance Binary SynContext where
         put x

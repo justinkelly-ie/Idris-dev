@@ -5,24 +5,25 @@ Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
-{-# LANGUAGE DeriveDataTypeable, DeriveFunctor, DeriveGeneric,
-             FlexibleInstances, MultiParamTypeClasses, PatternGuards,
-             TypeSynonymInstances #-}
+
+{-# LANGUAGE DeriveDataTypeable, DeriveFunctor, DeriveGeneric, PatternGuards #-}
 
 module Idris.AbsSyntaxTree where
 
-import Idris.Colours
 import Idris.Core.Elaborate hiding (Tactic(..))
 import Idris.Core.Evaluate
 import Idris.Core.TT
-import Idris.Core.Typecheck
 import Idris.Docstrings
 import IRTS.CodegenCommon
 import IRTS.Lang
 import Util.DynamicLinker
 import Util.Pretty
 
-import Prelude hiding ((<$>))
+import Idris.Colours
+
+import System.IO
+
+import Prelude hiding (Foldable, Traversable, (<$>))
 
 import Control.Applicative ((<|>))
 import qualified Control.Monad.Trans.Class as Trans (lift)
@@ -30,24 +31,20 @@ import Control.Monad.Trans.Except
 import Control.Monad.Trans.State.Strict
 import Data.Char
 import Data.Data (Data)
-import Data.Either
+
 import Data.Foldable (Foldable)
 import Data.Function (on)
 import Data.Generics.Uniplate.Data (children, universe)
 import Data.List hiding (group)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
+import Data.Maybe (mapMaybe, maybeToList)
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Traversable (Traversable)
 import Data.Typeable
-import Data.Word (Word)
-import Debug.Trace
 import GHC.Generics (Generic)
 import Network.Socket (PortNumber)
-import System.Console.Haskeline
-import System.IO
-import Text.PrettyPrint.Annotated.Leijen
+
 
 data ElabWhat = ETypes | EDefns | EAll
   deriving (Show, Eq)
@@ -66,7 +63,7 @@ data ElabInfo = EInfo {
   , elabFC    :: Maybe FC
   , constraintNS :: String        -- ^ filename for adding to constraint variables
   , pe_depth  :: Int
-
+  , noCaseLift :: [Name]         -- ^ types which shouldn't be made arguments to case
   -- | We may, recursively, collect transformations to do on the rhs,
   -- e.g. rewriting recursive calls to functions defined by 'with'
   , rhs_trans :: PTerm -> PTerm
@@ -74,10 +71,10 @@ data ElabInfo = EInfo {
   }
 
 toplevel :: ElabInfo
-toplevel = EInfo [] emptyContext id [] Nothing "(toplevel)" 0 id (\_ _ _ -> fail "Not implemented")
+toplevel = EInfo [] emptyContext id [] Nothing "(toplevel)" 0 [] id (\_ _ _ -> fail "Not implemented")
 
 toplevelWith :: String -> ElabInfo
-toplevelWith ns = EInfo [] emptyContext id [] Nothing ns 0 id (\_ _ _ -> fail "Not implemented")
+toplevelWith ns = EInfo [] emptyContext id [] Nothing ns 0 [] id (\_ _ _ -> fail "Not implemented")
 
 eInfoNames :: ElabInfo -> [Name]
 eInfoNames info = map fst (params info) ++ M.keys (inblock info)
@@ -91,7 +88,7 @@ data IOption = IOption {
   , opt_showimp      :: Bool          -- ^ show implicits
   , opt_errContext   :: Bool
   , opt_repl         :: Bool
-  , opt_verbose      :: Bool
+  , opt_verbose      :: Int
   , opt_nobanner     :: Bool
   , opt_quiet        :: Bool
   , opt_codegen      :: Codegen
@@ -112,6 +109,7 @@ data IOption = IOption {
   , opt_autoimpls    :: Bool
   } deriving (Show, Eq, Generic)
 
+defaultOpts :: IOption
 defaultOpts = IOption { opt_logLevel   = 0
                       , opt_logcats    = []
                       , opt_typecase   = False
@@ -120,7 +118,7 @@ defaultOpts = IOption { opt_logLevel   = 0
                       , opt_showimp    = False
                       , opt_errContext = False
                       , opt_repl       = True
-                      , opt_verbose    = True
+                      , opt_verbose    = 0
                       , opt_nobanner   = False
                       , opt_quiet      = False
                       , opt_codegen    = Via IBCFormat "c"
@@ -151,7 +149,8 @@ data PPOption = PPOption {
 data Optimisation = PETransform -- ^ partial eval and associated transforms
   deriving (Show, Eq, Generic)
 
-defaultOptimise = [PETransform]
+defaultOptimise :: [Optimisation]
+defaultOptimise = []
 
 -- | Pretty printing options with default verbosity.
 defaultPPOption :: PPOption
@@ -184,7 +183,9 @@ ppOption opt = PPOption {
 ppOptionIst :: IState -> PPOption
 ppOptionIst = ppOption . idris_options
 
-data LanguageExt = TypeProviders | ErrorReflection
+data LanguageExt = TypeProviders | ErrorReflection | UniquenessTypes
+                 | DSLNotation   | ElabReflection  | FCReflection
+                 | LinearTypes
   deriving (Show, Eq, Read, Ord, Generic)
 
 -- | The output mode in use
@@ -203,6 +204,12 @@ data DefaultTotality = DefaultCheckingTotal    -- ^ Total
                      | DefaultCheckingPartial  -- ^ Partial
                      | DefaultCheckingCovering -- ^Total coverage, but may diverge
   deriving (Show, Eq, Generic)
+
+-- | Configuration options for interactive editing.
+data InteractiveOpts = InteractiveOpts {
+    interactiveOpts_indentWith :: Int
+  , interactiveOpts_indentClause :: Int
+} deriving (Show, Generic)
 
 -- | The global state used in the Idris monad
 data IState = IState {
@@ -250,6 +257,7 @@ data IState = IState {
   , idris_metavars      :: [(Name, (Maybe Name, Int, [Name], Bool, Bool))]
   , idris_coercions              :: [Name]
   , idris_errRev                 :: [(Term, Term)]
+  , idris_errReduce              :: [Name]
   , syntax_rules                 :: SyntaxRules
   , syntax_keywords              :: [String]
   , imported                     :: [FilePath]                    -- ^ The imported modules
@@ -285,14 +293,12 @@ data IState = IState {
   , idris_postulates             :: S.Set Name
   , idris_externs                :: S.Set (Name, Int)
   , idris_erasureUsed            :: [(Name, Int)]                  -- ^ Function/constructor name, argument position is used
-  , idris_whocalls               :: Maybe (M.Map Name [Name])
-  , idris_callswho               :: Maybe (M.Map Name [Name])
 
   -- | List of names that were defined in the repl, and can be re-/un-defined
   , idris_repl_defs              :: [Name]
 
   -- | Stack of names currently being elaborated, Bool set if it's an
-  -- implementation (implementations appear twice; also as a funtion name)
+  -- implementation (implementations appear twice; also as a function name)
   , elab_stack                   :: [(Name, Bool)]
 
 
@@ -304,8 +310,8 @@ data IState = IState {
   , idris_inmodule               :: S.Set Name                -- ^ Names defined in current module
   , idris_ttstats                :: M.Map Term (Int, Term)
   , idris_fragile                :: Ctxt String               -- ^ Fragile names and explanation.
-  }
-  deriving Generic
+  , idris_interactiveOpts        :: InteractiveOpts
+  } deriving Generic
 
 -- Required for parsers library, and therefore trifecta
 instance Show IState where
@@ -330,11 +336,13 @@ data CGInfo = CGInfo {
 deriving instance Binary CGInfo
 !-}
 
+primDefs :: [Name]
 primDefs = [ sUN "unsafePerformPrimIO"
            , sUN "mkLazyForeignPrim"
            , sUN "mkForeignPrim"
            , sUN "void"
            , sUN "assert_unreachable"
+           , sUN "idris_crash"
            ]
 
 -- information that needs writing for the current module's .ibc file
@@ -366,6 +374,7 @@ data IBCWrite = IBCFix FixDecl
               | IBCFnInfo Name FnInfo
               | IBCTrans Name (Term, Term)
               | IBCErrRev (Term, Term)
+              | IBCErrReduce Name
               | IBCCG Name
               | IBCDoc Name
               | IBCCoercion Name
@@ -387,6 +396,12 @@ data IBCWrite = IBCFix FixDecl
               | IBCConstraint FC UConstraint
   deriving (Show, Generic)
 
+initialInteractiveOpts :: InteractiveOpts
+initialInteractiveOpts = InteractiveOpts {
+    interactiveOpts_indentWith = 2
+  , interactiveOpts_indentClause = 2
+}
+
 -- | The initial state for the compiler
 idrisInit :: IState
 idrisInit = IState initContext S.empty []
@@ -395,11 +410,11 @@ idrisInit = IState initContext S.empty []
                    emptyContext emptyContext emptyContext emptyContext
                    emptyContext emptyContext emptyContext emptyContext
                    emptyContext
-                   [] [] [] defaultOpts 6 [] [] [] [] emptySyntaxRules [] [] [] [] [] [] []
+                   [] [] [] defaultOpts 6 [] [] [] [] [] emptySyntaxRules [] [] [] [] [] [] []
                    [] [] Nothing [] Nothing [] [] Nothing Nothing emptyContext Private DefaultCheckingPartial [] Nothing [] []
                    (RawOutput stdout) True defaultTheme [] (0, emptyContext) emptyContext M.empty
-                   AutomaticWidth S.empty S.empty [] Nothing Nothing [] [] M.empty [] [] []
-                   emptyContext S.empty M.empty emptyContext
+                   AutomaticWidth S.empty S.empty [] [] [] M.empty [] [] []
+                   emptyContext S.empty M.empty emptyContext initialInteractiveOpts
 
 
 -- | The monad for the main REPL - reading and processing files and
@@ -485,6 +500,8 @@ data Opt = Filename String
          | ColourREPL Bool
          | Idemode
          | IdemodeSocket
+         | IndentWith Int
+         | IndentClause Int
          | ShowAll
          | ShowLibs
          | ShowLibDir
@@ -510,7 +527,7 @@ data Opt = Filename String
          | NoCoverage
          | ErrContext
          | ShowImpl
-         | Verbose
+         | Verbose Int
          | Port REPLPort -- ^ REPL TCP port
          | IBCSubDir String
          | ImportDir String
@@ -597,17 +614,21 @@ data Plicity = Imp { pargopts  :: [ArgOpt]
                    , pparam    :: Bool
                    , pscoped   :: Maybe ImplicitInfo -- ^ Nothing, if top level
                    , pinsource :: Bool               -- ^ Explicitly written in source
+                   , pcount    :: RigCount
                    }
              | Exp { pargopts :: [ArgOpt]
                    , pstatic  :: Static
                    , pparam   :: Bool -- ^ this is a param (rather than index)
+                   , pcount    :: RigCount
                    }
              | Constraint { pargopts :: [ArgOpt]
-                         ,  pstatic :: Static
+                          , pstatic :: Static
+                          , pcount    :: RigCount
                          }
              | TacImp { pargopts :: [ArgOpt]
                       , pstatic  :: Static
                       , pscript  :: PTerm
+                      , pcount    :: RigCount
                       }
              deriving (Show, Eq, Ord, Data, Generic, Typeable)
 
@@ -616,24 +637,32 @@ deriving instance Binary Plicity
 !-}
 
 is_scoped :: Plicity -> Maybe ImplicitInfo
-is_scoped (Imp _ _ _ s _) = s
-is_scoped _               = Nothing
+is_scoped (Imp _ _ _ s _ _) = s
+is_scoped _                 = Nothing
 
 -- Top level implicit
-impl              = Imp [] Dynamic False (Just (Impl False True False)) False
+impl              :: Plicity
+impl              = Imp [] Dynamic False (Just (Impl False True False)) False RigW
 -- Machine generated top level implicit
-impl_gen          = Imp [] Dynamic False (Just (Impl False True True)) False
+impl_gen          :: Plicity
+impl_gen          = Imp [] Dynamic False (Just (Impl False True True)) False RigW
 
 -- Scoped implicits
-forall_imp        = Imp [] Dynamic False (Just (Impl False False True)) False
-forall_constraint = Imp [] Dynamic False (Just (Impl True False True)) False
+forall_imp        :: Plicity
+forall_imp        = Imp [] Dynamic False (Just (Impl False False True)) False RigW
+forall_constraint :: Plicity
+forall_constraint = Imp [] Dynamic False (Just (Impl True False True)) False RigW
 
-expl              = Exp [] Dynamic False
-expl_param        = Exp [] Dynamic True
+expl              :: Plicity
+expl              = Exp [] Dynamic False RigW
+expl_param        :: Plicity
+expl_param        = Exp [] Dynamic True RigW
 
-constraint        = Constraint [] Static
+constraint        :: Plicity
+constraint        = Constraint [] Static RigW
 
-tacimpl t         = TacImp [] Dynamic t
+tacimpl           :: PTerm -> Plicity
+tacimpl t         = TacImp [] Dynamic t RigW
 
 data FnOpt = Inlinable -- ^ always evaluate when simplifying
            | TotalFn | PartialFn | CoveringFn
@@ -649,14 +678,9 @@ data FnOpt = Inlinable -- ^ always evaluate when simplifying
            | CExport String                 -- ^ export, with a C name
            | ErrorHandler                   -- ^ an error handler for use with the ErrorReflection extension
            | ErrorReverse                   -- ^ attempt to reverse normalise before showing in error
+           | ErrorReduce                    -- ^ unfold definition before showing an error
            | Reflection                     -- ^ a reflecting function, compile-time only
            | Specialise [(Name, Maybe Int)] -- ^ specialise it, freeze these names
-           | UnfoldIface Name [Name]
-                  -- ^ Unfold given interface name in the definition, the
-                  -- top level methods, and anything which has
-                  -- the interface name as an argument. This is to unfold
-                  -- things for termination checking, as interfaces will otherwise
-                  -- cause problems
            | Constructor -- ^ Data constructor type
            | AutoHint    -- ^ use in auto implicit search
            | PEGenerated -- ^ generated by partial evaluator
@@ -1403,7 +1427,7 @@ highestFC (PAppImpl t _)          = highestFC t
 -- Interface data
 
 data InterfaceInfo = CI {
-    implementationCtorName                   :: Name
+    implementationCtorName             :: Name
   , interface_methods                  :: [(Name, (Bool, FnOpts, PTerm))] -- ^ flag whether it's a "data" method
   , interface_defaults                 :: [(Name, (Name, PDecl))]         -- ^ method name -> default impl
   , interface_default_super_interfaces :: [PDecl]
@@ -1617,8 +1641,8 @@ getInferTerm (App _ (App _ _ _) tm) = tm
 getInferTerm tm = tm -- error ("getInferTerm " ++ show tm)
 
 getInferType (Bind n b sc)  = Bind n (toTy b) $ getInferType sc
-  where toTy (Lam t)        = Pi Nothing t (TType (UVar [] 0))
-        toTy (PVar t)       = PVTy t
+  where toTy (Lam r t)      = Pi r Nothing t (TType (UVar [] 0))
+        toTy (PVar _ t)     = PVTy t
         toTy b              = b
 getInferType (App _ (App _ _ ty) _) = ty
 
@@ -1813,7 +1837,15 @@ pprintPTerm ppo bnd docArgs infixes = prettySe (ppopt_depth ppo) startPrec bnd
       depth d . bracket p startPrec . group . align $
       kwd "let" <+> (group . align . hang 2 $ prettyBindingOf n False <+> text "=" <$> prettySe (decD d) startPrec bnd v) </>
       kwd "in" <+> (group . align . hang 2 $ prettySe (decD d) startPrec ((n, False):bnd) sc)
-    prettySe d p bnd (PPi (Exp l s _) n _ ty sc)
+    prettySe d p bnd (PPi (Exp l s _ rig) n _ ty sc)
+      | Rig0 <- rig =
+          depth d . bracket p startPrec . group $
+          enclose lparen rparen (group . align $ text "0" <+> prettyBindingOf n False <+> colon <+> prettySe (decD d) startPrec bnd ty) <+>
+          st <> text "->" <$> prettySe (decD d) startPrec ((n, False):bnd) sc
+      | Rig1 <- rig =
+          depth d . bracket p startPrec . group $
+          enclose lparen rparen (group . align $ text "1" <+> prettyBindingOf n False <+> colon <+> prettySe (decD d) startPrec bnd ty) <+>
+          st <> text "->" <$> prettySe (decD d) startPrec ((n, False):bnd) sc
       | n `elem` allNamesIn sc || ppopt_impl ppo && uname n || n `elem` docArgs
           || ppopt_pinames ppo && uname n =
           depth d . bracket p startPrec . group $
@@ -1833,24 +1865,28 @@ pprintPTerm ppo bnd docArgs infixes = prettySe (ppopt_depth ppo) startPrec bnd
           case s of
             Static -> text "%static" <> space
             _      -> empty
-    prettySe d p bnd (PPi (Imp l s _ fa _) n _ ty sc)
+    prettySe d p bnd (PPi (Imp l s _ fa _ rig) n _ ty sc)
       | ppopt_impl ppo =
           depth d . bracket p startPrec $
-          lbrace <> prettyBindingOf n True <+> colon <+> prettySe (decD d) startPrec bnd ty <> rbrace <+>
+          lbrace <> showRig rig n <+> colon <+> prettySe (decD d) startPrec bnd ty <> rbrace <+>
           st <> text "->" </> prettySe (decD d) startPrec ((n, True):bnd) sc
       | otherwise = depth d $ prettySe (decD d) startPrec ((n, True):bnd) sc
       where
+        showRig Rig0 n = text "0" <+> prettyBindingOf n True
+        showRig Rig1 n = text "1" <+> prettyBindingOf n True
+        showRig _ n = prettyBindingOf n True
+
         st =
           case s of
             Static -> text "%static" <> space
             _      -> empty
-    prettySe d p bnd (PPi (Constraint _ _) n _ ty sc) =
+    prettySe d p bnd (PPi (Constraint _ _ rig) n _ ty sc) =
       depth d . bracket p startPrec $
       prettySe (decD d) (startPrec + 1) bnd ty <+> text "=>" </> prettySe (decD d) startPrec ((n, True):bnd) sc
-    prettySe d p bnd (PPi (TacImp _ _ (PTactics [ProofSearch{}])) n _ ty sc) =
+    prettySe d p bnd (PPi (TacImp _ _ (PTactics [ProofSearch{}]) rig) n _ ty sc) =
       lbrace <> kwd "auto" <+> pretty n <+> colon <+> prettySe (decD d) startPrec bnd ty <>
       rbrace <+> text "->" </> prettySe (decD d) startPrec ((n, True):bnd) sc
-    prettySe d p bnd (PPi (TacImp _ _ s) n _ ty sc) =
+    prettySe d p bnd (PPi (TacImp _ _ s rig) n _ ty sc) =
       depth d . bracket p startPrec $
       lbrace <> kwd "default" <+> prettySe (decD d) (funcAppPrec + 1) bnd s <+> pretty n <+> colon <+> prettySe (decD d) startPrec bnd ty <>
       rbrace <+> text "->" </> prettySe (decD d) startPrec ((n, True):bnd) sc
@@ -2250,7 +2286,7 @@ getExps (_ : xs)              = getExps xs
 
 getShowArgs :: [PArg] -> [PArg]
 getShowArgs [] = []
-getShowArgs (e@(PExp _ _ _ tm) : xs) = e : getShowArgs xs
+getShowArgs (e@(PExp _ _ _ _) : xs) = e : getShowArgs xs
 getShowArgs (e : xs) | AlwaysShow `elem` argopts e = e : getShowArgs xs
                      | PImp _ _ _ _ tm <- e
                      , containsHole tm = e : getShowArgs xs
@@ -2378,7 +2414,7 @@ allNamesIn tm = nub $ ni 0 [] tm
     ni i env (PUnquote tm)        = ni (i - 1) env tm
     ni i env tm                   = concatMap (ni i env) (children tm)
 
-    niTacImp i env (TacImp _ _ scr) = ni i env scr
+    niTacImp i env (TacImp _ _ scr _) = ni i env scr
     niTacImp _ _ _                  = []
 
 
@@ -2414,7 +2450,7 @@ boundNamesIn tm = S.toList (ni 0 S.empty tm)
     niTms i set []        = set
     niTms i set (x : xs)  = niTms i (ni i set x) xs
 
-    niTacImp i set (TacImp _ _ scr) = ni i set scr
+    niTacImp i set (TacImp _ _ scr _) = ni i set scr
     niTacImp i set _                = set
 
 -- Return names which are valid implicits in the given term (type).
@@ -2470,6 +2506,8 @@ implicitNamesIn uvars ist tm
     ni 0 env (PIfThenElse _ c t f)            = mapM_ (ni 0 env) [c, t, f]
     ni 0 env (PLam fc n _ ty sc)              = do ni 0 env ty; ni 0 (n:env) sc
     ni 0 env (PPi p n _ ty sc)                = do ni 0 env ty; ni 0 (n:env) sc
+    ni 0 env (PLet fc n _ ty val sc)          = do ni 0 env ty;
+                                                   ni 0 env val; ni 0 (n:env) sc
     ni 0 env (PRewrite _ _ l r _)             = do ni 0 env l; ni 0 env r
     ni 0 env (PTyped l r)                     = do ni 0 env l; ni 0 env r
     ni 0 env (PPair _ _ _ l r)                = do ni 0 env l; ni 0 env r
@@ -2523,7 +2561,7 @@ namesIn uvars ist tm = nub $ ni 0 [] tm
 
     ni i env tm                     = concatMap (ni i env) (children tm)
 
-    niTacImp i env (TacImp _ _ scr) = ni i env scr
+    niTacImp i env (TacImp _ _ scr _) = ni i env scr
     niTacImp _ _ _                  = []
 
 -- Return which of the given names are used in the given term.
@@ -2558,12 +2596,12 @@ usedNamesIn vars ist tm = nub $ ni 0 [] tm
 
     ni i env tm                     = concatMap (ni i env) (children tm)
 
-    niTacImp i env (TacImp _ _ scr) = ni i env scr
+    niTacImp i env (TacImp _ _ scr _) = ni i env scr
     niTacImp _ _ _                = []
 
 -- Return the list of inaccessible (= dotted) positions for a name.
 getErasureInfo :: IState -> Name -> [Int]
 getErasureInfo ist n =
     case lookupCtxtExact n (idris_optimisation ist) of
-        Just (Optimise inacc detag force) -> map fst inacc
+        Just (Optimise inacc _ _) -> map fst inacc
         Nothing -> []

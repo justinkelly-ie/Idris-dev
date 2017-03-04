@@ -93,7 +93,7 @@ elabImplementation info syn doc argDocs what fc cs parents acc opts n nfc ps pex
          -- if the implementation type matches any of the implementations we have already,
          -- and it's not a named implementation, then it's overlapping, so report an error
          case expn of
-            Nothing 
+            Nothing
                | OverlappingDictionary `notElem` opts ->
                        do mapM_ (maybe (return ()) overlapping . findOverlapping ist (interface_determiners ci) (delab ist nty))
                                 (map fst $ interface_implementations ci)
@@ -130,7 +130,7 @@ elabImplementation info syn doc argDocs what fc cs parents acc opts n nfc ps pex
                               Just ty -> (map (\n -> (n, getTypeIn ist n ty)) headVars, ty)
                               _ -> (zip headVars (repeat Placeholder), Erased)
 
-         let impps = getImpParams ist (interface_impparams ci) 
+         let impps = getImpParams ist (interface_impparams ci)
                           (snd (unApply (substRetTy ty)))
          let iimpps = zip (interface_impparams ci) impps
 
@@ -154,8 +154,7 @@ elabImplementation info syn doc argDocs what fc cs parents acc opts n nfc ps pex
          let ds_defs = insertDefaults ist iname (interface_defaults ci) ns ds
          logElab 3 ("After defaults: " ++ show ds_defs ++ "\n")
 
-         let ds' = map (addUnfold iname (map fst (interface_methods ci))) $
-                    reorderDefs (map fst (interface_methods ci)) ds_defs
+         let ds' = reorderDefs (map fst (interface_methods ci)) ds_defs
          logElab 1 ("Reordered: " ++ show ds' ++ "\n")
 
          mapM_ (warnMissing ds' ns iname) (map fst (interface_methods ci))
@@ -222,12 +221,6 @@ elabImplementation info syn doc argDocs what fc cs parents acc opts n nfc ps pex
     intImpl = case ps of
                 [PConstant NoFC (AType (ATInt ITNative))] -> True
                 _ -> False
-
-    addUnfold iname ms (PTy doc docs syn fc opts n fc' tm)
-       = PTy doc docs syn fc (UnfoldIface iname ms : opts) n fc' tm
-    addUnfold iname ms (PClauses fc opts n cs)
-       = PClauses fc (UnfoldIface iname ms : opts) n cs
-    addUnfold iname ms dec = dec
 
     mkiname n' ns ps' expn' =
         case expn' of
@@ -310,16 +303,16 @@ elabImplementation info syn doc argDocs what fc cs parents acc opts n nfc ps pex
        where
           needed is p = pname p `elem` map pname is
 
-    lamBind i (PPi (Constraint _ _) _ _ _ sc) sc'
+    lamBind i (PPi (Constraint _ _ _) _ _ _ sc) sc'
           = PLam fc (sMN i "meth") NoFC Placeholder (lamBind (i+1) sc sc')
     lamBind i (PPi _ n _ ty sc) sc'
           = PLam fc (sMN i "meth") NoFC Placeholder (lamBind (i+1) sc sc')
     lamBind i _ sc = sc
-    methArgs i (PPi (Imp _ _ _ _ _) n _ ty sc)
+    methArgs i (PPi (Imp _ _ _ _ _ _) n _ ty sc)
         = PImp 0 True [] n (PRef fc [] (sMN i "meth")) : methArgs (i+1) sc
-    methArgs i (PPi (Exp _ _ _) n _ ty sc)
+    methArgs i (PPi (Exp _ _ _ _) n _ ty sc)
         = PExp 0 [] (sMN 0 "marg") (PRef fc [] (sMN i "meth")) : methArgs (i+1) sc
-    methArgs i (PPi (Constraint _ _) n _ ty sc)
+    methArgs i (PPi (Constraint _ _ _) n _ ty sc)
         = PConstraint 0 [] (sMN 0 "marg") (PResolveTC fc) : methArgs (i+1) sc
     methArgs i _ = []
 
@@ -354,7 +347,7 @@ elabImplementation info syn doc argDocs what fc cs parents acc opts n nfc ps pex
     extrabind [] x = x
 
     coninsert :: [(Name, PTerm)] -> [(Name, PTerm)] -> PTerm -> PTerm
-    coninsert cs ex (PPi p@(Imp _ _ _ _ _) n fc t sc) = PPi p n fc t (coninsert cs ex sc)
+    coninsert cs ex (PPi p@(Imp _ _ _ _ _ _) n fc t sc) = PPi p n fc t (coninsert cs ex sc)
     coninsert cs ex sc = conbind cs (extrabind ex sc)
 
     -- Reorder declarations to be in the same order as defined in the
@@ -516,6 +509,6 @@ checkInjectiveArgs fc n ds (Just ty)
     isInj i (Bind n b sc) = isInj i sc
     isInj _ _ = True
 
-    instantiateRetTy (Bind n (Pi _ _ _) sc)
+    instantiateRetTy (Bind n (Pi _ _ _ _) sc)
        = substV (P Bound n Erased) (instantiateRetTy sc)
     instantiateRetTy t = t

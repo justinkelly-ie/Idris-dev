@@ -68,7 +68,7 @@ import Debug.Trace
 
 -- | Top level elaborator info, supporting recursive elaboration
 recinfo :: FC -> ElabInfo
-recinfo fc = EInfo [] emptyContext id [] (Just fc) (fc_fname fc) 0 id elabDecl'
+recinfo fc = EInfo [] emptyContext id [] (Just fc) (fc_fname fc) 0 [] id elabDecl'
 
 -- | Return the elaborated term which calls 'main'
 elabMain :: Idris Term
@@ -116,9 +116,9 @@ elabPrims = do i <- getIState
 
           p_believeMe [_,_,x] = Just x
           p_believeMe _ = Nothing
-          believeTy = Bind (sUN "a") (Pi Nothing (TType (UVar [] (-2))) (TType (UVar [] (-1))))
-                       (Bind (sUN "b") (Pi Nothing (TType (UVar [] (-2))) (TType (UVar [] (-1))))
-                         (Bind (sUN "x") (Pi Nothing (V 1) (TType (UVar [] (-1)))) (V 1)))
+          believeTy = Bind (sUN "a") (Pi RigW Nothing (TType (UVar [] (-2))) (TType (UVar [] (-1))))
+                       (Bind (sUN "b") (Pi RigW Nothing (TType (UVar [] (-2))) (TType (UVar [] (-1))))
+                         (Bind (sUN "x") (Pi RigW Nothing (V 1) (TType (UVar [] (-1)))) (V 1)))
           elabBelieveMe
              = do let prim__believe_me = sUN "prim__believe_me"
                   updateContext (addOperator prim__believe_me believeTy 3 p_believeMe)
@@ -141,10 +141,10 @@ elabPrims = do i <- getIState
           vnNothing = VP (DCon 0 1 False) (sNS (sUN "Nothing") ["Maybe", "Prelude"]) VErased
           vnRefl = VP (DCon 0 2 False) eqCon VErased
 
-          synEqTy = Bind (sUN "a") (Pi Nothing (TType (UVar [] (-3))) (TType (UVar [] (-2))))
-                     (Bind (sUN "b") (Pi Nothing (TType (UVar [] (-3))) (TType (UVar [] (-2))))
-                      (Bind (sUN "x") (Pi Nothing (V 1) (TType (UVar [] (-2))))
-                       (Bind (sUN "y") (Pi Nothing (V 1) (TType (UVar [] (-2))))
+          synEqTy = Bind (sUN "a") (Pi RigW Nothing (TType (UVar [] (-3))) (TType (UVar [] (-2))))
+                     (Bind (sUN "b") (Pi RigW Nothing (TType (UVar [] (-3))) (TType (UVar [] (-2))))
+                      (Bind (sUN "x") (Pi RigW Nothing (V 1) (TType (UVar [] (-2))))
+                       (Bind (sUN "y") (Pi RigW Nothing (V 1) (TType (UVar [] (-2))))
                          (mkApp nMaybe [mkApp (P (TCon 0 4) eqTy Erased)
                                                [V 3, V 2, V 1, V 0]]))))
           elabSynEq
@@ -197,7 +197,12 @@ elabDecl' what info d@(PClauses f o n ps)
                     [] -> []
          elabClauses info f (o ++ o') n ps
 elabDecl' what info (PMutual f ps)
-    = do case ps of
+    = do i <- get
+         -- Find the interfaces we're defining in the block so that we can
+         -- inline them appropriately before totality checking
+         let (ufnames, umethss) = unzip (mapMaybe (findTCImpl i) ps)
+
+         case ps of
               [p] -> elabDecl what info p
               _ -> do mapM_ (elabDecl ETypes info) ps
                       mapM_ (elabDecl EDefns info) ps
@@ -210,9 +215,10 @@ elabDecl' what info (PMutual f ps)
          i <- get
          mapM_ (\n -> do logElab 5 $ "Simplifying " ++ show n
                          ctxt' <- do ctxt <- getContext
-                                     tclift $ simplifyCasedef n (getErasureInfo i) ctxt
+                                     tclift $ simplifyCasedef n ufnames umethss (getErasureInfo i) ctxt
                          setContext ctxt')
                  (map snd (idris_totcheck i))
+
          mapM_ buildSCG (idris_totcheck i)
          mapM_ checkDeclTotality (idris_totcheck i)
          -- We've only checked that things are total independently. Given
@@ -222,6 +228,23 @@ elabDecl' what info (PMutual f ps)
          clear_totcheck
   where isDataDecl (PData _ _ _ _ _ _) = True
         isDataDecl _ = False
+
+        findTCImpl :: IState -> PDecl -> Maybe (Name, [Name])
+        findTCImpl ist (PImplementation _ _ _ _ _ _ _ _ n_in _ ps _ _ expn _)
+             = let (n, meths) 
+                        = case lookupCtxtName n_in (idris_interfaces ist) of
+                               [(n', ci)] -> (n', map fst (interface_methods ci))
+                               _ -> (n_in, [])
+                   iname = mkiname n (namespace info) ps expn in
+                   Just (iname, meths)
+        findTCImpl ist _ = Nothing
+    
+        mkiname n' ns ps' expn' =
+           case expn' of
+                Nothing -> case ns of
+                              [] -> SN (sImplementationN n' (map show ps'))
+                              m -> sNS (SN (sImplementationN n' (map show ps'))) m
+                Just nm -> nm
 
         getDataDecls (PNamespace _ _ ds : decls)
            = getDataDecls ds ++ getDataDecls decls
@@ -284,6 +307,8 @@ elabDecl' what info (PRecord doc rsyn fc opts name nfc ps pdocs fs cname cdoc cs
 -}
 elabDecl' _ info (PDSL n dsl)
     = do i <- getIState
+         unless (DSLNotation `elem` idris_language_extensions i) $
+           ifail "You must turn on the DSLNotation extension to use a dsl block"
          putIState (i { idris_dsls = addDef n dsl (idris_dsls i) })
          addIBC (IBCDSL n)
 elabDecl' what info (PDirective i)
@@ -296,6 +321,9 @@ elabDecl' what info (PTransform fc safety old new)
     = do elabTransform info fc safety old new
          return ()
 elabDecl' what info (PRunElabDecl fc script ns)
-    = do elabRunElab info fc script ns
+    = do i <- getIState
+         unless (ElabReflection `elem` idris_language_extensions i) $
+           ierror $ At fc (Msg "You must turn on the ElabReflection extension to use %runElab")
+         elabRunElab info fc script ns
          return ()
 elabDecl' _ _ _ = return () -- skipped this time

@@ -1,6 +1,6 @@
 {-|
-Module      : Idris.Coverage
-Description : The coverage and totality checkers for Idris are in this module.
+Module      : Idris.Termination
+Description : The termination checker for Idris
 Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
@@ -48,7 +48,7 @@ checkAllCovering _ _ _ _ = return ()
 --
 -- If so, set the 'AllGuarded' flag which can be used by the productivity check
 checkIfGuarded :: Name -> Idris ()
-checkIfGuarded n 
+checkIfGuarded n
    = do i <- get
         let ctxt = tt_ctxt i
         case lookupDefExact n ctxt of
@@ -65,9 +65,9 @@ checkIfGuarded n
                            Nothing -> False
                            Just fs -> AllGuarded `elem` fs
 
-    -- Top level thing always needs to be a constructor application if 
+    -- Top level thing always needs to be a constructor application if
     -- the delayed things are going to be definitely guarded by this definition
-    allGuarded names i (STerm t) 
+    allGuarded names i (STerm t)
           | (P _ fn _, args) <- unApply t,
             guard fn i
             = and (map (guardedTerm names i) args)
@@ -86,7 +86,7 @@ checkIfGuarded n
                 = and (map (guardedTerm names i) args)
     guardedTerm names i (App _ f a) = False
     guardedTerm names i tm = True
-    
+
     guardedAlt names i (ConCase _ _ _ t) = allGuarded names i t
     guardedAlt names i (FnCase _ _ t) = allGuarded names i t
     guardedAlt names i (ConstCase _ t) = allGuarded names i t
@@ -112,13 +112,13 @@ checkPositive mut_ns (cn, ty')
   where
     args t = [0..length (getArgTys t)-1]
 
-    cp i (Bind n (Pi _ aty _) sc)
+    cp i (Bind n (Pi _ _ aty _) sc)
          = posArg i aty && cp i sc
     cp i t | (P _ n' _ , args) <- unApply t,
              n' `elem` mut_ns = all noRec args
     cp i _ = True
 
-    posArg ist (Bind _ (Pi _ nty _) sc) = noRec nty && posArg ist sc
+    posArg ist (Bind _ (Pi _ _ nty _) sc) = noRec nty && posArg ist sc
     posArg ist t = posParams ist t
 
     noRec arg = all (\x -> x `notElem` mut_ns) (allTTNames arg)
@@ -163,7 +163,7 @@ checkTotality path fc n
         t <- getTotality n
         i <- getIState
         ctxt' <- do ctxt <- getContext
-                    tclift $ simplifyCasedef n (getErasureInfo i) ctxt
+                    tclift $ simplifyCasedef n [] [] (getErasureInfo i) ctxt
         setContext ctxt'
         ctxt <- getContext
         i <- getIState
@@ -185,7 +185,7 @@ checkTotality path fc n
                             case unApply (getRetTy ty) of
                               (P _ tyn _, _) -> do
                                  let ms = case lookupCtxt tyn (idris_datatypes i) of
-                                       [TI _ _ _ _ xs@(_:_)] -> xs
+                                       [TI _ _ _ _ xs@(_:_) _] -> xs
                                        ts -> [tyn]
                                  checkPositive ms (n, ty)
                               _-> return $ Total []
@@ -239,7 +239,7 @@ verifyTotality (fc, n)
                  case getPartial ist [] ns of
                       Nothing -> return ()
                       Just bad -> do let t' = Partial (Other bad)
-                                     logCoverage 2 $ "Set to " ++ show t'
+                                     logCoverage 2 $ "Set in verify to " ++ show t'
                                      setTotality n t'
                                      addIBC (IBCTotal n t')
               _ -> return ()
@@ -369,7 +369,7 @@ buildSCG' ist topfn pats args = nub $ concatMap scgPat pats where
         = findCalls cases Unguarded f pvs pargs ++ findCalls cases Unguarded a pvs pargs
   findCalls cases guarded (Bind n (Let t v) e) pvs pargs
         = findCalls cases Unguarded t pvs pargs ++
-          findCalls cases Unguarded v pvs pargs ++ 
+          findCalls cases Unguarded v pvs pargs ++
           -- Substitute in the scope since this might reveal some useful
           -- structure
           findCalls cases guarded (substV v e) pvs pargs
@@ -429,8 +429,8 @@ buildSCG' ist topfn pats args = nub $ concatMap scgPat pats where
      = case lookupTy n (tt_ctxt ist) of
             [ty] -> expand 0 (normalise (tt_ctxt ist) [] ty) args
             _ -> args
-     where expand i (Bind n (Pi _ _ _) sc) (x : xs) = x : expand (i + 1) sc xs
-           expand i (Bind n (Pi _ _ _) sc) [] = Just (i, Same) : expand (i + 1) sc []
+     where expand i (Bind n (Pi _ _ _ _) sc) (x : xs) = x : expand (i + 1) sc xs
+           expand i (Bind n (Pi _ _ _ _) sc) [] = Just (i, Same) : expand (i + 1) sc []
            expand i _ xs = xs
 
   mkChange n args pargs = [(n, expandToArity n (sizes args))]
@@ -471,15 +471,15 @@ buildSCG' ist topfn pats args = nub $ concatMap scgPat pats where
 
       isInductive (P _ nty _) (P _ nty' _) =
           let (co, muts) = case lookupCtxt nty (idris_datatypes ist) of
-                                [TI _ x _ _ muts] -> (x, muts)
+                                [TI _ x _ _ muts _] -> (x, muts)
                                 _ -> (False, []) in
               (nty == nty' || any (== nty') muts) && not co
       isInductive _ _ = False
 
-  dePat (Bind x (PVar ty) sc) = dePat (instantiate (P Bound x ty) sc)
+  dePat (Bind x (PVar _ ty) sc) = dePat (instantiate (P Bound x ty) sc)
   dePat t = t
 
-  patvars (Bind x (PVar _) sc) = x : patvars sc
+  patvars (Bind x (PVar _ _) sc) = x : patvars sc
   patvars _ = []
 
   allGuarded n ist = case lookupCtxtExact n (idris_flags ist) of
@@ -634,16 +634,16 @@ collapse' def (d : xs)         = collapse' d xs
 -- collapse' Unchecked []         = Total []
 collapse' def []               = def
 
-totalityCheckBlock :: Idris ()
-totalityCheckBlock = do
-         ist <- getIState
-         -- Do totality checking after entire mutual block
-         mapM_ (\n -> do logElab 5 $ "Simplifying " ++ show n
-                         ctxt' <- do ctxt <- getContext
-                                     tclift $ simplifyCasedef n (getErasureInfo ist) ctxt
-                         setContext ctxt')
-                 (map snd (idris_totcheck ist))
-         mapM_ buildSCG (idris_totcheck ist)
-         mapM_ checkDeclTotality (idris_totcheck ist)
-         clear_totcheck
+-- totalityCheckBlock :: Idris ()
+-- totalityCheckBlock = do
+--          ist <- getIState
+--          -- Do totality checking after entire mutual block
+--          mapM_ (\n -> do logElab 5 $ "Simplifying " ++ show n
+--                          ctxt' <- do ctxt <- getContext
+--                                      tclift $ simplifyCasedef n (getErasureInfo ist) ctxt
+--                          setContext ctxt')
+--                  (map snd (idris_totcheck ist))
+--          mapM_ buildSCG (idris_totcheck ist)
+--          mapM_ checkDeclTotality (idris_totcheck ist)
+--          clear_totcheck
 

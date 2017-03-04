@@ -5,16 +5,21 @@ Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
+
 {-# LANGUAGE DeriveFunctor, MultiWayIf, PatternGuards #-}
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
+
 module Idris.Docs (
     pprintDocs
   , getDocs, pprintConstDocs, pprintTypeDoc
   , FunDoc, FunDoc'(..), Docs, Docs'(..)
   ) where
 
-import Idris.AbsSyntax
-import Idris.AbsSyntaxTree
+import Idris.AbsSyntax (FixDecl(..), Fixity, HowMuchDocs(..), IState(..), Idris,
+                        InterfaceInfo(..), PArg'(..), PDecl'(..), PPOption(..),
+                        PTerm(..), Plicity(..), RecordInfo(..), basename,
+                        getIState, modDocName, ppOptionIst, pprintPTerm,
+                        prettyIst, prettyName, type1Doc, typeDescription)
 import Idris.Core.Evaluate
 import Idris.Core.TT
 import Idris.Delaborate
@@ -26,7 +31,6 @@ import Util.Pretty
 
 import Prelude hiding ((<$>))
 
-import Control.Arrow (first)
 import Data.List
 import Data.Maybe
 import qualified Data.Text as T
@@ -220,7 +224,7 @@ pprintDocs ist (InterfaceDoc n doc meths params constraints implementations sub_
     dumpImplementation :: PTerm -> Doc OutputAnnotation
     dumpImplementation = pprintPTerm ppo params' [] infixes
 
-    prettifySubInterfaces (PPi (Constraint _ _) _ _ tm _)    = prettifySubInterfaces tm
+    prettifySubInterfaces (PPi (Constraint _ _ _) _ _ tm _)  = prettifySubInterfaces tm
     prettifySubInterfaces (PPi plcity           nm fc t1 t2) = PPi plcity (safeHead nm pNames) NoFC (prettifySubInterfaces t1) (prettifySubInterfaces t2)
     prettifySubInterfaces (PApp fc ref args)                 = PApp fc ref $ updateArgs pNames args
     prettifySubInterfaces tm                                 = tm
@@ -235,7 +239,7 @@ pprintDocs ist (InterfaceDoc n doc meths params constraints implementations sub_
     updateRef nm (PRef fc _ _) = PRef fc [] nm
     updateRef _  pt          = pt
 
-    isSubInterface (PPi (Constraint _ _) _ _ (PApp _ _ args) (PApp _ (PRef _ _ nm) args')) = nm == n && map getTm args == map getTm args'
+    isSubInterface (PPi (Constraint _ _ _) _ _ (PApp _ _ args) (PApp _ (PRef _ _ nm) args')) = nm == n && map getTm args == map getTm args'
     isSubInterface (PPi _   _            _ _ pt)                                           = isSubInterface pt
     isSubInterface _                                                                       = False
 
@@ -356,7 +360,7 @@ docInterface n ci
     getDImpl (PImplementation _ _ _ _ _ _ _ _ _ _ _ _ t _ _) = Just t
     getDImpl _                                         = Nothing
 
-    isSubInterface (PPi (Constraint _ _) _ _ (PApp _ _ args) (PApp _ (PRef _ _ nm) args'))
+    isSubInterface (PPi (Constraint _ _ _) _ _ (PApp _ _ args) (PApp _ (PRef _ _ nm) args'))
       = nm == n && map getTm args == map getTm args'
     isSubInterface (PPi _ _ _ _ pt)
       = isSubInterface pt
