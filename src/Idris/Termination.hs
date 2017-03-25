@@ -351,7 +351,8 @@ buildSCG' ist topfn pats args = nub $ concatMap scgPat pats where
        Delayed <- guarded
        -- Under a delayed recursive call just check the arguments
            = concatMap (\x -> findCalls cases Unguarded x pvs pargs) args
-     | (P _ n _, args) <- unApply ap
+     | (P _ n _, args) <- unApply ap,
+       not (n `elem` pvs)
         -- Ordinary call, not under a delay.
         -- If n is a constructor, set 'args' as Guarded
         = let nguarded = case guarded of
@@ -455,6 +456,10 @@ buildSCG' ist topfn pats args = nub $ concatMap scgPat pats where
          | a == t = isInductive (fst (unApply (getRetTy tyn)))
                                 (fst (unApply (getRetTy tyt)))
       smaller ty a (ap@(App _ f s), _)
+          -- Nothing can be smaller than a delayed infinite thing...
+          | (P (DCon _ _ _) (UN d) _, [P _ (UN reason) _, _, _]) <- unApply ap,
+            d == txt "Delay" && reason == txt "Infinite"
+               = False
           | (P (DCon _ _ _) n _, args) <- unApply ap
                = let tyn = getType n in
                      any (smaller (ty `mplus` Just tyn) a)

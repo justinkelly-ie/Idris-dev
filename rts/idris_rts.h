@@ -372,9 +372,13 @@ VAL idris_concat(VM* vm, VAL l, VAL r);
 VAL idris_strlt(VM* vm, VAL l, VAL r);
 VAL idris_streq(VM* vm, VAL l, VAL r);
 VAL idris_strlen(VM* vm, VAL l);
+// Read a line from a file
 VAL idris_readStr(VM* vm, FILE* h);
+// Read up to 'num' characters from a file
+VAL idris_readChars(VM* vm, int num, FILE* h);
 
 VAL idris_strHead(VM* vm, VAL str);
+VAL idris_strShift(VM* vm, VAL str, int num);
 VAL idris_strTail(VM* vm, VAL str);
 // This is not expected to be efficient! Mostly we wouldn't expect to call
 // it at all at run time.

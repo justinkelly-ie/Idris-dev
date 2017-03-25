@@ -239,6 +239,11 @@ void* allocate(size_t size, int outerlock) {
 #endif
         return ptr;
     } else {
+        // If we're trying to allocate something bigger than the heap,
+        // grow the heap here so that the new heap is big enough.
+        if (size > vm->heap.size) {
+            vm->heap.size += size;
+        }
         idris_gc(vm);
 #ifdef HAS_PTHREAD
         if (lock) { // not message passing
@@ -595,6 +600,22 @@ VAL idris_readStr(VM* vm, FILE* h) {
     return ret;
 }
 
+VAL idris_readChars(VM* vm, int num, FILE* h) {
+    VAL ret;
+    char *buffer = malloc((num+1)*sizeof(char));
+    size_t len;
+    len = fread(buffer, sizeof(char), (size_t)num, h);
+    buffer[len] = '\0';
+
+    if (len <= 0) {
+        ret = MKSTR(vm, "");
+    } else {
+        ret = MKSTR(vm, buffer);
+    }
+    free(buffer);
+    return ret;
+}
+
 void idris_crash(char* msg) {
     fprintf(stderr, "%s\n", msg);
     exit(1);
@@ -615,7 +636,7 @@ VAL MKSTROFFc(VM* vm, StrOffset* off) {
     return cl;
 }
 
-VAL idris_strTail(VM* vm, VAL str) {
+VAL idris_strShift(VM* vm, VAL str, int num) {
     // If there's no room, just copy the string, or we'll have a problem after
     // gc moves str
     if (space(vm, sizeof(Closure) + sizeof(StrOffset))) {
@@ -633,13 +654,17 @@ VAL idris_strTail(VM* vm, VAL str) {
         }
 
         cl->info.str_offset->str = root;
-        cl->info.str_offset->offset = offset+idris_utf8_charlen(GETSTR(str));
+        cl->info.str_offset->offset = offset+idris_utf8_findOffset(GETSTR(str), num);
 
         return cl;
     } else {
         char* nstr = GETSTR(str);
         return MKSTR(vm, nstr+idris_utf8_charlen(nstr));
     }
+}
+
+VAL idris_strTail(VM* vm, VAL str) {
+    return idris_strShift(vm, str, 1);
 }
 
 VAL idris_strCons(VM* vm, VAL x, VAL xs) {
@@ -671,14 +696,24 @@ VAL idris_strIndex(VM* vm, VAL str, VAL i) {
 }
 
 VAL idris_substr(VM* vm, VAL offset, VAL length, VAL str) {
-    char *start = idris_utf8_advance(GETSTR(str), GETINT(offset));
-    char *end = idris_utf8_advance(start, GETINT(length));
-    Closure* newstr = allocate(sizeof(Closure) + (end - start) +1, 0);
-    SETTY(newstr, CT_STRING);
-    newstr -> info.str = (char*)newstr + sizeof(Closure);
-    memcpy(newstr -> info.str, start, end - start);
-    *(newstr -> info.str + (end - start) + 1) = '\0';
-    return newstr;
+    int offset_val = GETINT(offset);
+    int length_val = GETINT(length);
+    char* str_val = GETSTR(str);
+
+    // If the substring is a suffix, use idris_strShift to avoid reallocating
+    if (offset_val + length_val >= strlen(str_val)) {
+        return idris_strShift(vm, str, offset_val);
+    }
+    else {
+        char *start = idris_utf8_advance(str_val, offset_val);
+        char *end = idris_utf8_advance(start, length_val);
+        Closure* newstr = allocate(sizeof(Closure) + (end - start) +1, 0);
+        SETTY(newstr, CT_STRING);
+        newstr -> info.str = (char*)newstr + sizeof(Closure);
+        memcpy(newstr -> info.str, start, end - start);
+        *(newstr -> info.str + (end - start) + 1) = '\0';
+        return newstr;
+    }
 }
 
 VAL idris_strRev(VM* vm, VAL str) {
