@@ -5,7 +5,7 @@ Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
-{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE FlexibleInstances, PatternGuards #-}
 
 module Idris.DataOpts(applyOpts) where
 
@@ -97,7 +97,7 @@ applyDataOptRT :: Name -> Int -> Int -> Bool -> [Term] -> Term
 applyDataOptRT n tag arity uniq args
     | length args == arity = doOpts n args
     | otherwise = let extra = satArgs (arity - length args)
-                      tm = doOpts n (args ++ map (\n -> P Bound n Erased) extra)
+                      tm = doOpts n (map (weakenTm (length extra)) args ++ map (\n -> P Bound n Erased) extra)
                   in bind extra tm
   where
     satArgs n = map (\i -> sMN i "sat") [1..n]

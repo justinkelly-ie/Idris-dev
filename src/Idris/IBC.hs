@@ -5,7 +5,7 @@ Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
-{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances, TypeSynonymInstances #-}
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 
 module Idris.IBC (loadIBC, loadPkgIndex,
@@ -23,6 +23,7 @@ import Idris.Docstrings (Docstring)
 import qualified Idris.Docstrings as D
 import Idris.Error
 import Idris.Imports
+import Idris.Options
 import Idris.Output
 import IRTS.System (getIdrisLibDir)
 
@@ -47,7 +48,7 @@ import System.Directory
 import System.FilePath
 
 ibcVersion :: Word16
-ibcVersion = 160
+ibcVersion = 162
 
 -- | When IBC is being loaded - we'll load different things (and omit
 -- different structures/definitions) depending on which phase we're in.
@@ -145,7 +146,7 @@ loadIBC reexport phase fp
                         Right archive -> do
                             if fullLoad
                                 then process reexport phase archive fp
-                                else unhide phase archive
+                                else unhide phase fp archive
                             addImported reexport fp
 
 -- | Load an entire package from its index file
@@ -223,7 +224,7 @@ writeArchive fp i = do let a = L.foldl (\x y -> addEntryToArchive y x) emptyArch
 writeIBC :: FilePath -> FilePath -> Idris ()
 writeIBC src f
     = do
-         logIBC  1 $ "Writing IBC for: " ++ show f
+         logIBC  2 $ "Writing IBC for: " ++ show f
          iReport 2 $ "Writing IBC for: " ++ show f
          i <- getIState
 --          case (Data.List.map fst (idris_metavars i)) \\ primDefs of
@@ -233,8 +234,8 @@ writeIBC src f
          ibcf <- mkIBC (ibc_write i) (initIBC { sourcefile = src })
          idrisCatch (do runIO $ createDirectoryIfMissing True (dropFileName f)
                         writeArchive f ibcf
-                        logIBC 1 "Written")
-            (\c -> do logIBC 1 $ "Failed " ++ pshow i c)
+                        logIBC 2 "Written")
+            (\c -> do logIBC 2 $ "Failed " ++ pshow i c)
          return ()
 
 -- | Write a package index containing all the imports in the current
@@ -244,14 +245,14 @@ writePkgIndex :: FilePath -> Idris ()
 writePkgIndex f
     = do i <- getIState
          let imps = map (\ (x, y) -> (True, x)) $ idris_imported i
-         logIBC 1 $ "Writing package index " ++ show f ++ " including\n" ++
+         logIBC 2 $ "Writing package index " ++ show f ++ " including\n" ++
                 show (map snd imps)
          resetNameIdx
          let ibcf = initIBC { ibc_imports = imps }
          idrisCatch (do runIO $ createDirectoryIfMissing True (dropFileName f)
                         writeArchive f ibcf
-                        logIBC 1 "Written")
-            (\c -> do logIBC 1 $ "Failed " ++ pshow i c)
+                        logIBC 2 "Written")
+            (\c -> do logIBC 2 $ "Failed " ++ pshow i c)
          return ()
 
 mkIBC :: [IBCWrite] -> IBCFile -> Idris IBCFile
@@ -358,9 +359,9 @@ getEntry alt f a = case findEntryByPath f a of
                 Nothing -> return alt
                 Just e -> return $! (force . decode . fromEntry) e
 
-unhide :: IBCPhase -> Archive -> Idris ()
-unhide phase ar = do
-    processImports True phase ar
+unhide :: IBCPhase -> FilePath -> Archive -> Idris ()
+unhide phase fp ar = do
+    processImports True phase fp ar
     processAccess True phase ar
 
 process :: Bool -- ^ Reexporting
@@ -369,7 +370,7 @@ process :: Bool -- ^ Reexporting
 process reexp phase archive fn = do
                 ver <- getEntry 0 "ver" archive
                 when (ver /= ibcVersion) $ do
-                                    logIBC 1 "ibc out of date"
+                                    logIBC 2 "ibc out of date"
                                     let e = if ver < ibcVersion
                                             then "an earlier" else "a later"
                                     ldir <- runIO $ getIdrisLibDir
@@ -392,7 +393,7 @@ process reexp phase archive fn = do
                 when srcok $ timestampOlder source fn
                 processImportDirs archive
                 processSourceDirs archive
-                processImports reexp phase archive
+                processImports reexp phase fn archive
                 processImplicits archive
                 processInfix archive
                 processStatics archive
@@ -404,7 +405,7 @@ process reexp phase archive fn = do
                 processOptimise  archive
                 processSyntax archive
                 processKeywords archive
-                processObjectFiles archive
+                processObjectFiles fn archive
                 processLibs archive
                 processCodegenFlags archive
                 processDynamicLibs archive
@@ -508,28 +509,21 @@ processSourceDirs ar = do
     fs <- getEntry [] "ibc_sourcedirs" ar
     mapM_ addSourceDir fs
 
-processImports :: Bool -> IBCPhase -> Archive -> Idris ()
-processImports reexp phase ar = do
+processImports :: Bool -> IBCPhase -> FilePath -> Archive -> Idris ()
+processImports reexp phase fname ar = do
     fs <- getEntry [] "ibc_imports" ar
     mapM_ (\(re, f) -> do
         i <- getIState
         ibcsd <- valIBCSubDir i
-        ids <- allImportDirs
-        fp <- findImport ids ibcsd f
---                        if (f `elem` imported i)
---                         then logLvl 1 $ "Already read " ++ f
+        ids <- rankedImportDirs fname
         putIState (i { imported = f : imported i })
         let phase' = case phase of
                          IBC_REPL _ -> IBC_REPL False
                          p -> p
+        fp <- findIBC ids ibcsd f
         case fp of
-            LIDR fn -> do
-                logIBC 1 $ "Failed at " ++ fn
-                ifail "Must be an ibc"
-            IDR fn -> do
-                logIBC 1 $ "Failed at " ++ fn
-                ifail "Must be an ibc"
-            IBC fn src -> loadIBC (reexp && re) phase' fn) fs
+            Nothing -> do logIBC 2 $ "Failed to load ibc " ++ f
+            Just fn -> do loadIBC (reexp && re) phase' fn) fs
 
 processImplicits :: Archive -> Idris ()
 processImplicits ar = do
@@ -604,11 +598,11 @@ processKeywords ar = do
     k <- getEntry [] "ibc_keywords" ar
     updateIState (\i -> i { syntax_keywords = k ++ syntax_keywords i })
 
-processObjectFiles :: Archive -> Idris ()
-processObjectFiles ar = do
+processObjectFiles :: FilePath -> Archive -> Idris ()
+processObjectFiles fn ar = do
     os <- getEntry [] "ibc_objs" ar
     mapM_ (\ (cg, obj) -> do
-        dirs <- allImportDirs
+        dirs <- rankedImportDirs fn
         o <- runIO $ findInPath dirs obj
         addObjectFile cg o) os
 
@@ -650,7 +644,7 @@ processDefs ar = do
             case d' of
                 TyDecl _ _ -> return ()
                 _ -> do
-                    logIBC 1 $ "SOLVING " ++ show n
+                    logIBC 2 $ "SOLVING " ++ show n
                     solveDeferred emptyFC n
             updateIState (\i -> i { tt_ctxt = addCtxtDef n d' (tt_ctxt i) })) ds
     where
@@ -749,9 +743,9 @@ processAccess reexp phase ar = do
 
         if (not reexp)
             then do
-                logIBC 1 $ "Not exporting " ++ show n
+                logIBC 2 $ "Not exporting " ++ show n
                 setAccessibility n Hidden
-            else logIBC 1 $ "Exporting " ++ show n
+            else logIBC 2 $ "Exporting " ++ show n
         -- Everything should be available at the REPL from
         -- things imported publicly
         when (phase == IBC_REPL True) $ setAccessibility n Public) ds
@@ -2292,6 +2286,9 @@ instance (Binary t) => Binary (PDo' t) where
                                       put x1
                                       put x2
                                       put x3
+                DoRewrite x1 x2 -> do putWord8 5
+                                      put x1
+                                      put x2
         get
           = do i <- getWord8
                case i of
@@ -2318,6 +2315,10 @@ instance (Binary t) => Binary (PDo' t) where
                            x2 <- get
                            x3 <- get
                            return (DoLetP x1 x2 x3)
+                   5 -> do
+                           x1 <- get
+                           x2 <- get
+                           return (DoRewrite x1 x2)
                    _ -> error "Corrupted binary data for PDo'"
 
 

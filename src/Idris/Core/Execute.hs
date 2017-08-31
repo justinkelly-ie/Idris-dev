@@ -36,6 +36,8 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Traversable (forM)
 import Debug.Trace
 import System.IO
+import System.IO.Error
+import System.IO.Unsafe
 
 #ifdef IDRIS_FFI
 import Foreign.C.String
@@ -72,6 +74,27 @@ data ExecVal = EP NameType Name ExecVal
              | EThunk Context ExecEnv Term
              | EHandle Handle
              | EStringBuf (IORef String)
+
+fileError :: IORef ExecVal
+{-# NOINLINE fileError #-}
+fileError = unsafePerformIO $ newIORef $ operationNotPermitted
+
+operationNotPermitted =
+  ioWrap $ mkRaw $ EApp (EP (DCon 0 1 False)
+                            (sNS (sUN "GenericFileError") ["File", "Prelude"])
+                            EErased)
+                        (EConstant (I 1))
+
+namedFileError name =
+  ioWrap $ mkRaw $ (EP (DCon 0 0 False)
+                       (sNS (sUN name) ["File", "Prelude"])
+                       EErased)
+
+mapError :: IOError -> ExecVal
+mapError e
+  | (isDoesNotExistError e) = namedFileError "FileNotFound"
+  | (isPermissionError e)   = namedFileError "PermissionDenied"
+  | otherwise               = operationNotPermitted
 
 mkRaw :: ExecVal -> ExecVal
 mkRaw arg = EApp (EApp (EP (DCon 0 1 False) (sNS (sUN "MkRaw") ["FFI_C"]) EErased)
@@ -325,7 +348,11 @@ execForeign env ctxt arity ty fn xs onfail
                 ch <- execIO $ fmap (ioWrap . EConstant . I . fromEnum) getChar
                 execApp env ctxt ch xs
     | Just (FFun "idris_time" _ _) <- foreignFromTT arity ty fn xs
-           = do execIO $ fmap (ioWrap . EConstant . I . round) getPOSIXTime
+           = do execIO $ fmap (ioWrap . mkRaw . EConstant . I . round) getPOSIXTime
+    | Just (FFun "idris_showerror" _ _) <- foreignFromTT arity ty fn xs
+           = do execIO $ return $ ioWrap $ EConstant $ Str "Operation not permitted"
+    | Just (FFun "idris_mkFileError" _ _) <- foreignFromTT arity ty fn xs
+           = do execIO $ readIORef fileError
     | Just (FFun "fileOpen" [(_,fileStr), (_,modeStr)] _) <- foreignFromTT arity ty fn xs
            = case (fileStr, modeStr) of
                (EConstant (Str f), EConstant (Str mode)) ->
@@ -343,8 +370,8 @@ execForeign env ctxt arity ty fn xs onfail
                                                    hSetBinaryMode h' True
                                                    return $ Right (ioWrap (EHandle h'), drop arity xs)
                                      Left err -> return $ Left err)
-                               (\e -> let _ = ( e::SomeException)
-                                      in return $ Right (ioWrap (EPtr nullPtr), drop arity xs))
+                               (\e -> do writeIORef fileError $ mapError e
+                                         return $ Right (ioWrap (EPtr nullPtr), drop arity xs))
                     case f of
                       Left err -> execFail . Msg $ err
                       Right (res, rest) -> execApp env ctxt res rest
@@ -497,7 +524,7 @@ getOp :: Name -> [ExecVal] -> Maybe (Exec ExecVal, [ExecVal])
 getOp fn (_ : _ : x : xs) | fn == pbm = Just (return x, xs)
 getOp fn (_ : EConstant (Str n) : xs)
     | fn == pws =
-              Just (do execIO $ putStr n
+              Just (do execIO $ putStr n >> hFlush stdout
                        return (EConstant (I 0)), xs)
 getOp fn (_:xs)
     | fn == prs =
@@ -505,7 +532,7 @@ getOp fn (_:xs)
                        return (EConstant (Str line)), xs)
 getOp fn (_ : EP _ fn' _ : EConstant (Str n) : xs)
     | fn == pwf && fn' == pstdout =
-              Just (do execIO $ putStr n
+              Just (do execIO $ putStr n >> hFlush stdout
                        return (EConstant (I 0)), xs)
 getOp fn (_ : EP _ fn' _ : xs)
     | fn == prf && fn' == pstdin =
@@ -513,7 +540,7 @@ getOp fn (_ : EP _ fn' _ : xs)
                        return (EConstant (Str line)), xs)
 getOp fn (_ : EHandle h : EConstant (Str n) : xs)
     | fn == pwf =
-              Just (do execIO $ hPutStr h n
+              Just (do execIO $ hPutStr h n >> hFlush h
                        return (EConstant (I 0)), xs)
 getOp fn (_ : EHandle h : xs)
     | fn == prf =

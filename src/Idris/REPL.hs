@@ -5,7 +5,7 @@ License     : BSD3
 Maintainer  : The Idris Community.
 -}
 
-{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE FlexibleContexts, PatternGuards #-}
 
 module Idris.REPL
   ( idemodeStart
@@ -26,6 +26,10 @@ import Control.Monad
 import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Except (runExceptT)
 import Control.Monad.Trans.State.Strict (evalStateT, get, put)
+import qualified Data.Binary as Binary
+import qualified Data.ByteString.Base64 as Base64
+import qualified Data.ByteString.Lazy as Lazy
+import qualified Data.ByteString.UTF8 as UTF8
 import Data.Char
 import Data.Either (partitionEithers)
 import Data.List hiding (group)
@@ -64,6 +68,7 @@ import Idris.Info
 import Idris.Inliner
 import Idris.Interactive
 import Idris.ModeCommon
+import Idris.Options
 import Idris.Output
 import Idris.Parser hiding (indent)
 import Idris.Prover
@@ -582,6 +587,16 @@ ideModeForceTermImplicits h id bnd impl tm =
      runIO . hPutStrLn h $ IdeMode.convSExp "return" msg id
 
 splitName :: String -> Either String Name
+splitName s | "{{{{{" `isPrefixOf` s =
+              decode $ drop 5 $ reverse $ drop 5 $ reverse s
+  where decode x =
+          case Base64.decode (UTF8.fromString x) of
+            Left err -> Left err
+            Right ok ->
+              case Binary.decodeOrFail (Lazy.fromStrict ok) of
+                Left _ -> Left "Bad binary instance for Name"
+                Right (_, _, n) -> Right n
+
 splitName s = case reverse $ splitOn "." s of
                 [] -> Left ("Didn't understand name '" ++ s ++ "'")
                 [n] -> Right . sUN $ unparen n

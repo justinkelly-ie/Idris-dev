@@ -110,7 +110,8 @@ reg068.idr:1:6:Main.nat has a name which may be implicitly bound.
 This is likely to lead to problems!
 reg068.idr:2:6:Main.ze has a name which may be implicitly bound.
 This is likely to lead to problems!
-reg068.idr:2:8-11:WARNING: nat is bound as an implicit
+reg068.idr:2:8-11:
+nat is bound as an implicit
 	Did you mean to refer to Main.nat?
 reg068.idr:2:6:When checking constructor Main.ze:
 Type level variable nat is not Main.nat
@@ -145,3 +146,5 @@ When checking argument value to function Prelude.Basics.the:
                         -0.0
                 and
                         0.0
+Canonicity.idr:9:1:Canonicity.f is not total as there are missing cases
+Canonicity.idr:12:1:Canonicity.NaN is possibly not total due to: Canonicity.f

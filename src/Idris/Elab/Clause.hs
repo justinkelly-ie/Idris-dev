@@ -31,6 +31,7 @@ import Idris.Elab.Utils
 import Idris.Error
 import Idris.Imports
 import Idris.Inliner
+import Idris.Options
 import Idris.Output (iRenderResult, iWarn, iputStrLn, pshow, sendHighlighting)
 import Idris.PartialEval
 import Idris.Primitives
@@ -836,7 +837,7 @@ elabClause info opts (cnum, PClause fc fname lhs_in_as withs rhs_in_as wherebloc
 
         let rhs' = rhsElab
 
-        when (not (null defer)) $ logElab 1 $ "DEFERRED " ++
+        when (not (null defer)) $ logElab 2 $ "DEFERRED " ++
                     show (map (\ (n, (_,_,t,_)) -> (n, t)) defer)
 
         -- If there's holes, set the metavariables as undefinable

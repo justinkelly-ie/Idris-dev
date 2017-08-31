@@ -48,8 +48,8 @@ For example, the
 Only one implementation of an interface can be given for a type — implementations may
 not overlap. Implementation declarations can themselves have constraints.
 To help with resolution, the arguments of an implementation must be
-constructors (either data or type constructors), variables or
-constants (i.e. you cannot give an implementation for a function).  For
+constructors (either data or type constructors) or variables 
+(i.e. you cannot give an implementation for a function).  For
 example, to define a ``Show`` implementation for vectors, we need to know
 that there is a ``Show`` implementation for the element type, because we are
 going to use it to convert each element to a ``String``:
@@ -253,9 +253,9 @@ are both available, or return ``Nothing`` if one or both are not ("fail fast"). 
 
 ::
 
-    *ifaces> m_add (Just 20) (Just 22)
+    *Interfaces> m_add (Just 20) (Just 22)
     Just 42 : Maybe Int
-    *ifaces> m_add (Just 20) Nothing
+    *Interfaces> m_add (Just 20) Nothing
     Nothing : Maybe Int
 
 Pattern Matching Bind
@@ -565,6 +565,49 @@ implementation ``myord`` as follows, at the Idris prompt:
     *named_impl> show (sort @{myord} testList)
     "[ssssO, sssO, sO]" : String
 
+
+Sometimes, we also need access to a named parent implementation. For example,
+the prelude defines the following ``Semigroup`` interface:
+
+.. code-block:: idris
+
+    interface Semigroup ty where
+      (<+>) : ty -> ty -> ty
+
+Then it defines ``Monoid``, which extends ``Semigroup`` with a "neutral"
+value:
+
+.. code-block:: idris
+
+    interface Semigroup ty => Monoid ty where
+      neutral : ty
+
+We can define two different implementations of ``Semigroup`` and
+``Monoid`` for ``Nat``, one based on addition and one on multiplication:
+
+.. code-block:: idris
+
+    [PlusNatSemi] Semigroup Nat where
+      (<+>) x y = x + y
+
+    [MultNatSemi] Semigroup Nat where
+      (<+>) x y = x * y
+
+The neutral value for addition is ``0``, but the neutral value for multiplication
+is ``1``. It's important, therefore, that when we define implementations
+of ``Monoid`` they extend the correct ``Semigroup`` implementation. We can
+do this with a ``using`` clause in the implementation as follows:
+
+.. code-block:: idris
+
+    [PlusNatMonoid] Monoid Nat using PlusNatSemi where
+      neutral = 0
+
+    [MultNatMonoid] Monoid Nat using MultNatSemi where
+      neutral = 1
+
+The ``using PlusNatSemi`` clause indicates that ``PlusNatMonoid`` should
+extend ``PlusNatSemi`` specifically.
 
 Determining Parameters
 ======================

@@ -14,6 +14,7 @@ import Idris.Core.Evaluate
 import Idris.Core.TT
 import Idris.Delaborate
 import Idris.Error
+import Idris.Options
 import Idris.Output (iWarn, iputStrLn)
 
 import Control.Monad.State.Strict
@@ -284,8 +285,8 @@ buildSCG (_, n) = do
 
 delazy = delazy' False -- not lazy codata
 delazy' all t@(App _ f a)
-     | (P _ (UN l) _, [_, _, arg]) <- unApply t,
-       l == txt "Force" = delazy' all arg
+     | (P _ (UN l) _, [P _ (UN lty) _, _, arg]) <- unApply t,
+       l == txt "Force" && (all || lty /= txt "Infinite") = delazy' all arg
      | (P _ (UN l) _, [P _ (UN lty) _, _, arg]) <- unApply t,
        l == txt "Delay" && (all || lty /= txt "Infinite") = delazy arg
      | (P _ (UN l) _, [P _ (UN lty) _, arg]) <- unApply t,
@@ -448,13 +449,12 @@ buildSCG' ist topfn pats args = nub $ concatMap scgPat pats where
           | otherwise = checkSize a ps
       checkSize a [] = Nothing
 
-      -- the smaller thing we find must be defined in the same group of mutally
-      -- defined types as <a>, and not be coinductive - so carry the type of
-      -- the constructor we've gone under.
-
-      smaller (Just tyn) a (t, Just tyt)
-         | a == t = isInductive (fst (unApply (getRetTy tyn)))
-                                (fst (unApply (getRetTy tyt)))
+      -- Can't be smaller than an erased thing (need to be careful here
+      -- because Erased equals everything)
+      smaller _ _ (Erased, _) = False -- never smaller than an erased thing
+      -- If a == t, and we're under a cosntructor, we've found something
+      -- smaller
+      smaller (Just tyn) a (t, Just tyt) | a == t = True
       smaller ty a (ap@(App _ f s), _)
           -- Nothing can be smaller than a delayed infinite thing...
           | (P (DCon _ _ _) (UN d) _, [P _ (UN reason) _, _, _]) <- unApply ap,
@@ -472,13 +472,6 @@ buildSCG' ist topfn pats args = nub $ concatMap scgPat pats where
 
       getType n = case lookupTyExact n (tt_ctxt ist) of
                        Just ty -> delazy (normalise (tt_ctxt ist) [] ty) -- must exist
-
-      isInductive (P _ nty _) (P _ nty' _) =
-          let (co, muts) = case lookupCtxt nty (idris_datatypes ist) of
-                                [TI _ x _ _ muts _] -> (x, muts)
-                                _ -> (False, []) in
-              (nty == nty' || any (== nty') muts) && not co
-      isInductive _ _ = False
 
   dePat (Bind x (PVar _ ty) sc) = dePat (instantiate (P Bound x ty) sc)
   dePat t = t

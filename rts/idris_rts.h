@@ -42,6 +42,11 @@ typedef struct {
     size_t offset;
 } StrOffset;
 
+typedef struct {
+    char* str;
+    size_t len; // Cached strlen (we do 'strlen' a lot)
+} String;
+
 // A foreign pointer, managed by the idris GC
 typedef struct {
     size_t size;
@@ -59,7 +64,7 @@ typedef struct Closure {
         con c;
         int i;
         double f;
-        char* str;
+        String str;
         StrOffset* str_offset;
         void* ptr;
         uint8_t bits8;
@@ -182,7 +187,8 @@ typedef void(*func)(VM*, VAL*);
 #define ALIGN(__p, __alignment) ((__p + __alignment - 1) & ~(__alignment - 1))
 
 // Retrieving values
-#define GETSTR(x) (ISSTR(x) ? (((VAL)(x))->info.str) : GETSTROFF(x))
+#define GETSTR(x) (ISSTR(x) ? (((VAL)(x))->info.str.str) : GETSTROFF(x))
+#define GETSTRLEN(x) (ISSTR(x) ? (((VAL)(x))->info.str.len) : GETSTROFFLEN(x))
 #define GETPTR(x) (((VAL)(x))->info.ptr)
 #define GETMPTR(x) (((VAL)(x))->info.mptr->data)
 #define GETFLOAT(x) (((VAL)(x))->info.f)
@@ -200,20 +206,17 @@ typedef void(*func)(VM*, VAL*);
 #define CTAG(x) (((x)->info.c.tag_arity) >> 8)
 #define CARITY(x) ((x)->info.c.tag_arity & 0x000000ff)
 
-// Use top 16 bits for saying which heap value is in
-// Bottom 16 bits for closure type
 
-#define GETTY(x) ((x)->ty & 0x0000ffff)
-#define SETTY(x,t) (x)->ty = (((x)->ty & 0xffff0000) | (t))
-
-#define GETHEAP(x) ((x)->ty >> 16)
-#define SETHEAP(x,y) (x)->ty = (((x)->ty & 0x0000ffff) | ((y) << 16))
+#define GETTY(x) ((x)->ty)
+#define SETTY(x,t) ((x)->ty = t)
 
 // Integers, floats and operators
 
 typedef intptr_t i_int;
 
-#define MKINT(x) ((void*)((i_int)(((x)<<1)+1)))
+// Shifting a negative number left is undefined and (rightly) gives a warning,
+// but we're only interested in shifting the bit pattern, so cast it
+#define MKINT(x) ((void*)((i_int)((((uintptr_t)x)<<1)+1)))
 #define GETINT(x) ((i_int)(x)>>1)
 #define ISINT(x) ((((i_int)x)&1) == 1)
 #define ISSTR(x) (GETTY(x) == CT_STRING)
@@ -227,7 +230,15 @@ typedef intptr_t i_int;
 
 // Stack management
 
-#define INITFRAME VAL* myoldbase
+#ifdef IDRIS_TRACE
+#define TRACE idris_trace(vm, __FUNCTION__, __LINE__);
+#else
+#define TRACE 
+#endif
+
+#define INITFRAME TRACE\
+                  VAL* myoldbase
+
 #define REBASE vm->valstack_base = oldbase
 #define RESERVE(x) if (vm->valstack_top+(x) > vm->stack_max) { stackOverflow(); } \
                    else { memset(vm->valstack_top, 0, (x)*sizeof(VAL)); }
@@ -253,11 +264,13 @@ VAL MKCDATA(VM* vm, CHeapItem * item);
 VAL MKFLOATc(VM* vm, double val);
 VAL MKSTROFFc(VM* vm, StrOffset* off);
 VAL MKSTRc(VM* vm, char* str);
+VAL MKSTRclen(VM* vm, char* str, int len);
 VAL MKPTRc(VM* vm, void* ptr);
 VAL MKMPTRc(VM* vm, void* ptr, size_t size);
 VAL MKCDATAc(VM* vm, CHeapItem * item);
 
 char* GETSTROFF(VAL stroff);
+size_t GETSTROFFLEN(VAL stroff);
 
 // #define SETTAG(x, a) (x)->info.c.tag = (a)
 #define SETARG(x, i, a) ((x)->info.c.args)[i] = ((VAL)(a))
@@ -338,6 +351,7 @@ VM* idris_getSender(Msg* msg);
 int idris_getChannel(Msg* msg);
 void idris_freeMsg(Msg* msg);
 
+void idris_trace(VM* vm, const char* func, int line);
 void dumpVal(VAL r);
 void dumpStack(VM* vm);
 

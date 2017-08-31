@@ -5,6 +5,8 @@ Copyright   :
 License     : BSD3
 Maintainer  : The Idris Community.
 -}
+{-# LANGUAGE FlexibleContexts #-}
+
 module IRTS.CodegenC (codegenC) where
 
 import Idris.AbsSyntax
@@ -151,29 +153,29 @@ showCStr s = '"' : foldr ((++) . showChar) "\"" s
         -- Note: we need the double quotes around the codes because otherwise
         -- "\n3" would get encoded as "\x0a3", which is incorrect.
         -- Instead, we opt for "\x0a""3" and let the C compiler deal with it.
-        | ord c < 0x10  = "\"\"\\x0" ++ showHex (ord c) "\"\""
-        | ord c < 0x20  = "\"\"\\x"  ++ showHex (ord c) "\"\""
+        | ord c < 0x20  = showUTF8 (ord c)
         | ord c < 0x7f  = [c]    -- 0x7f = \DEL
         | otherwise = showHexes (utf8bytes (ord c))
 
-    utf8bytes :: Int -> [Int]
-    utf8bytes x = let (h : bytes) = split [] x in
-                      headHex h (length bytes) : map toHex bytes
-      where
-        split acc 0 = acc
-        split acc x = let xbits = x .&. 0x3f
-                          xrest = shiftR x 6 in
-                          split (xbits : acc) xrest
-
-        headHex h 1 = h + 0xc0
-        headHex h 2 = h + 0xe0
-        headHex h 3 = h + 0xf0
-        headHex h n = error "Can't happen: Invalid UTF8 character"
-
-        toHex i = i + 0x80
-
+    showUTF8 c = "\"\"\\x" ++ pad (showHex c "") ++ "\"\""
     showHexes = foldr ((++) . showUTF8) ""
-    showUTF8 c = "\"\"\\x" ++ showHex c "\"\""
+
+    utf8bytes :: Int -> [Int]
+    utf8bytes x
+        | x <= 0x7f     = [x]
+        | x <= 0x7ff    = let (y : ys) = split [] 2 x in (y .|. 0xc0) : map (.|. 0x80) ys
+        | x <= 0xffff   = let (y : ys) = split [] 3 x in (y .|. 0xe0) : map (.|. 0x80) ys
+        | x <= 0x10ffff = let (y : ys) = split [] 4 x in (y .|. 0xf0) : map (.|. 0x80) ys
+        | otherwise = error $ "Invalid Unicode code point U+" ++ showHex x ""
+      where
+        split acc 1 x = x : acc
+        split acc i x = split (x .&. 0x3f : acc) (i - 1) (shiftR x 6)
+
+    pad :: String -> String
+    pad s = case length s of
+                 1 -> "0" ++ s
+                 2 -> s
+                 _ -> error $ "Can't happen: String of invalid length " ++ show s
 
 bcc :: Int -> BC -> String
 bcc i (ASSIGN l r) = indent i ++ creg l ++ " = " ++ creg r ++ ";\n"
@@ -183,7 +185,7 @@ bcc i (ASSIGNCONST l c)
     mkConst (I i) = "MKINT(" ++ show i ++ ")"
     mkConst (BI i) | i < (2^30) = "MKINT(" ++ show i ++ ")"
                    | otherwise = "MKBIGC(vm,\"" ++ show i ++ "\")"
-    mkConst (Fl f) = "MKFLOAT(vm, " ++ show f ++ ")"
+    mkConst (Fl f) = "MKFLOAT(vm, " ++ (map toUpper $ show f) ++ ")"
     mkConst (Ch c) = "MKINT(" ++ show (fromEnum c) ++ ")"
     mkConst (Str s) = "MKSTR(vm, " ++ showCStr s ++ ")"
     mkConst (B8  x) = "idris_b8const(vm, "  ++ show x ++ "U)"
@@ -841,14 +843,14 @@ genWrapper (desc, tag) =  ret ++ " " ++ wrapperName tag ++ "(" ++
                                             indent 1 ++ "STOREOLD;\n" ++
                                             indent 1 ++ "BASETOP(0);\n" ++
                                             indent 1 ++ "ADDTOP(2);\n" ++
-                                            indent 1 ++ "CALL(_idris__123_APPLY0_125_);\n" ++
+                                            indent 1 ++ "CALL(_idris__123_APPLY_95_0_125_);\n" ++
                                             indent 1 ++ "TOP(0)=REG1;\n" ++
                                             applyArgs (y:xs)
                         applyArgs x = push 1 x ++
                                       indent 1 ++ "STOREOLD;\n" ++
                                       indent 1 ++ "BASETOP(0);\n" ++
                                       indent 1 ++ "ADDTOP(" ++ show (length x + 1) ++ ");\n" ++
-                                      indent 1 ++ "CALL(_idris__123_APPLY0_125_);\n"
+                                      indent 1 ++ "CALL(_idris__123_APPLY_95_0_125_);\n"
                         renderArgs [] = "void"
                         renderArgs [((s, _), n)] = s ++ " a" ++ (show n)
                         renderArgs (((s, _), n):xs) = s ++ " a" ++ (show n) ++ ", " ++
