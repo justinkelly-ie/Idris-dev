@@ -3,12 +3,13 @@ module Text.Lexer
 %default total
 
 ||| A language of token recognisers.
-||| The `consumes` flag is True is the recogniser is guaranteed to consume
-||| at least one character
+||| @ consumes If `True`, this recogniser is guaranteed to consume at
+|||            least one character of input when it succeeds.
 export
 data Recognise : (consumes : Bool) -> Type where
      Empty : Recognise False
      Fail : Recognise c
+     Expect : Recognise c -> Recognise False
      Pred : (Char -> Bool) -> Recognise True
      SeqEat : Recognise True -> Inf (Recognise e) -> Recognise True
      SeqEmpty : Recognise e1 -> Recognise e2 -> Recognise (e1 || e2)
@@ -38,6 +39,27 @@ export
 (<|>) : Recognise c1 -> Recognise c2 -> Recognise (c1 && c2)
 (<|>) = Alt
 
+||| A recogniser that always fails.
+export
+fail : Recognise c
+fail = Fail
+
+||| Positive lookahead. Never consumes input.
+export
+expect : Recognise c -> Recognise False
+expect = Expect
+
+||| Negative lookahead. Never consumes input.
+export
+reject : Recognise c -> Recognise False
+reject Empty            = Fail
+reject Fail             = Empty
+reject (Expect x)       = reject x
+reject (Pred f)         = Expect (Pred (not . f))
+reject (SeqEat r1 r2)   = reject r1 <|> Expect (SeqEat r1 (reject r2))
+reject (SeqEmpty r1 r2) = reject r1 <|> Expect (SeqEmpty r1 (reject r2))
+reject (Alt r1 r2)      = reject r1 <+> reject r2
+
 ||| Recognise a specific character
 export
 is : Char -> Lexer
@@ -47,6 +69,32 @@ is x = Pred (==x)
 export
 isNot : Char -> Lexer
 isNot x = Pred (/=x)
+
+||| Recognise a character case-insensitively
+export
+like : Char -> Lexer
+like x = Pred (\y => toUpper x == toUpper y)
+
+||| Recognise anything but the given character case-insensitively
+export
+notLike : Char -> Lexer
+notLike x = Pred (\y => toUpper x /= toUpper y)
+
+||| Recognise a specific string
+export
+exact : String -> Lexer
+exact str with (unpack str)
+  exact str | [] = Fail -- Not allowed, Lexer has to consume
+  exact str | (x :: xs)
+      = foldl SeqEmpty (is x) (map is xs)
+
+||| Recognise a specific string case-insensitively
+export
+approx : String -> Lexer
+approx str with (unpack str)
+  approx str | [] = Fail -- Not allowed, Lexer has to consume
+  approx str | (x :: xs)
+      = foldl SeqEmpty (like x) (map like xs)
 
 ||| Recognise a lexer or recognise no input. This is not guaranteed
 ||| to consume input
@@ -83,6 +131,11 @@ manyTill l end = end <|> opt (l <+> manyTill l end)
 export
 any : Lexer
 any = Pred (const True)
+
+||| Recognise any character if the sub-lexer `l` fails.
+export
+non : (l : Lexer) -> Lexer
+non l = reject l <+> any
 
 ||| Recognise no input (doesn't consume any input)
 export
@@ -122,6 +175,10 @@ strTail start (MkStrLen str len)
 scan : Recognise c -> Nat -> StrLen -> Maybe Nat
 scan Empty idx str = pure idx
 scan Fail idx str = Nothing
+scan (Expect r) idx str
+    = case scan r idx str of
+           Just _  => pure idx
+           Nothing => Nothing
 scan (Pred f) idx str
     = do c <- strIndex str idx
          if f c
@@ -144,28 +201,91 @@ takeToken lex str
     = do i <- scan lex 0 str -- i must be > 0 if successful
          pure (substr 0 i (getString str), strTail i str)
 
-||| Recognise a digit 0-9
+||| Recognise a character range [`a`-`b`]. Also works in reverse!
+export
+range : (start : Char) -> (end : Char) -> Lexer
+range start end = pred (\x => (x >= min start end)
+                           && (x <= max start end))
+
+||| Recognise a single digit 0-9
+export
+digit : Lexer
+digit = pred isDigit
+
+||| Recognise one or more digits
 export
 digits : Lexer
-digits = some (Pred isDigit)
+digits = some digit
 
-||| Recognise a specific string
+||| Recognise a single hexidecimal digit
 export
-exact : String -> Lexer
-exact str with (unpack str)
-  exact str | [] = Fail -- Not allowed, Lexer has to consume
-  exact str | (x :: xs)
-      = foldl SeqEmpty (is x) (map is xs)
+hexDigit : Lexer
+hexDigit = digit <|> oneOf "abcdefABCDEF"
 
-||| Recognise a whitespace character
+||| Recognise one or more hexidecimal digits
+export
+hexDigits : Lexer
+hexDigits = some hexDigit
+
+||| Recognise a single alpha character
+export
+alpha : Lexer
+alpha = pred isAlpha
+
+||| Recognise one or more alpha characters
+export
+alphas : Lexer
+alphas = some alpha
+
+||| Recognise a lowercase alpha character
+export
+lower : Lexer
+lower = pred isLower
+
+||| Recognise one or more lowercase alpha characters
+export
+lowers : Lexer
+lowers = some lower
+
+||| Recognise an uppercase alpha character
+export
+upper : Lexer
+upper = pred isUpper
+
+||| Recognise one or more uppercase alpha characters
+export
+uppers : Lexer
+uppers = some upper
+
+||| Recognise an alphanumeric character
+export
+alphaNum : Lexer
+alphaNum = pred isAlphaNum
+
+||| Recognise one or more alphanumeric characters
+export
+alphaNums : Lexer
+alphaNums = some alphaNum
+
+||| Recognise a single whitespace character
 export
 space : Lexer
-space = some (pred isSpace)
+space = pred isSpace
 
-||| Recognise a non-alphanumeric, non-whitespace character
+||| Recognise one or more whitespace characters
+export
+spaces : Lexer
+spaces = some space
+
+||| Recognise a single non-whitespace, non-alphanumeric character
 export
 symbol : Lexer
-symbol = some (pred (\x => not (isAlphaNum x) && not (isSpace x)))
+symbol = pred (\x => not (isSpace x || isAlphaNum x))
+
+||| Recognise one or more non-whitespace, non-alphanumeric characters
+export
+symbols : Lexer
+symbols = some symbol
 
 ||| Recognise zero or more occurrences of a sub-lexer between
 ||| delimiting lexers
@@ -201,6 +321,11 @@ charLit = let q = '\'' in
 export
 intLit : Lexer
 intLit = opt (is '-') <+> digits
+
+||| Recognise a hexidecimal literal, prefixed by "0x" or "0X"
+export
+hexLit : Lexer
+hexLit = is '0' <+> oneOf "xX" <+> hexDigits
 
 ||| A mapping from lexers to the tokens they produce.
 ||| This is a list of pairs `(Lexer, String -> tokenType)`
