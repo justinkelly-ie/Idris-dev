@@ -1,7 +1,6 @@
 module TestData where
 
 import Data.IntMap as IMap
-import Data.Map.Strict as Map
 import Data.Set as Set
 
 data Codegen = C | JS deriving (Show, Eq, Ord)
@@ -72,7 +71,8 @@ testFamiliesData = [
       ( 17, ANY  ),
       ( 18, ANY  ),
       ( 19, ANY  ),
-      ( 20, ANY  )]),
+      ( 20, ANY  ),
+      ( 21, C_CG  )]),
   ("bignum",          "Bignum",
     [ (  1, ANY  ),
       (  2, ANY  )]),
@@ -129,6 +129,7 @@ testFamiliesData = [
     , (  8, C_CG )
     , (  9, C_CG )
     , ( 10, NODE_CG )
+    , ( 11, NODE_CG )
     ]),
   ("folding",         "Folding",
     [ (  1, ANY  )]),
@@ -158,7 +159,11 @@ testFamiliesData = [
       ( 13, ANY  ),
       ( 14, C_CG ),
       ( 15, ANY  ),
-      ( 16, ANY  )]),
+      ( 16, ANY  ),
+-- FIXME: Re-enable interactive017 once it works with and without node.
+-- FIXME: See https://github.com/idris-lang/Idris-dev/pull/4046#issuecomment-326910042
+--      ( 17, ANY  ),
+      ( 18, ANY  )]),
   ("interfaces",      "Interfaces",
     [ (  1, ANY  ),
       (  2, ANY  ),

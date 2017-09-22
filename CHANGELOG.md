@@ -1,10 +1,21 @@
 # New in 1.1.*
 
-+ Addition of `Text.Literate`, a module for working with literate
-  source files.
+## Language updates
+
 + In `@`-patterns such as `x@p`, `x` is now in scope on the right-hand side
   of any definitions in `where` clauses, provided the left-hand side of the
   definition does not shadow it.
+
+
+## Library Updates
+
++ Added `Text.Literate`, a module for working with literate source files.
++ Added `Data.IORef`, for working with mutable references in `IO`.
+
+## Tool Updates
++ Private functions are no longer visible in the REPL except for modules
+  that are explicitly loaded.
++ The --interface option now creates CommonJS modules on the node backend.
 
 # New in 1.1.1
 
